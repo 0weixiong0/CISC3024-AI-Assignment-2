@@ -23,7 +23,12 @@
   "figure_08_confusion_matrix_s20261008_A1.png",
   "figure_06_ood_detection.png",
   "figure_09_evidence_anatomy_s20261006.png",
-  "figure_10_evidence_lambda.png"
+  "figure_10_evidence_lambda.png",
+  "figure_01_architecture.png",
+  "figure_13_search_funnel.png",
+  "figure_14_spectral_norm_ablation.png",
+  "figure_15_calibration_families_20261006.png",
+  "figure_16_uncertainty_vs_correctness_20261006.png"
  ],
  "aggregate": {
   "B1_ce": {

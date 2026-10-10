@@ -24,6 +24,7 @@ import glob
 import json
 import os
 import sys
+from collections import Counter
 from pathlib import Path
 
 import matplotlib
@@ -472,6 +473,250 @@ def load_store_from_cache(payload: dict) -> dict:
     return store
 
 
+# ---------------------------------------------------------------- report figures, second pass
+#
+# These four answer questions the first pass could not: how the algorithm was found, what the
+# architecture actually does, what the Lipschitz budget bought, and whether uncertainty separates
+# right answers from wrong ones. All of them read files that already exist -- the screening ledger,
+# the matrix results and the per-image cache -- so none of them can disagree with a table.
+
+LEDGER = ROOT / "research_records" / "stage_01_screening_ledger.csv"
+MAIN_RESULTS = ROOT / "runs" / "full_1791561662" / "matrix_results.json"
+NOSN_RESULTS = ROOT / "runs" / "full_1791636055" / "matrix_results_identity_nosn.json"
+
+DISPOSITION_ORDER = [
+    ("recommended_primary", "recommended as primary"),
+    ("recommended_comparator", "recommended as comparator"),
+    ("tooling_selected", "selected as tooling"),
+    ("critical_evidence", "critical evidence against"),
+    ("negative_finding", "negative finding"),
+    ("foundational_background", "foundational background"),
+    ("reserve", "reserve"),
+    ("reserve_alternative", "reserve alternative"),
+    ("tooling_reserve", "tooling reserve"),
+    ("hold", "held pending verification"),
+    ("rejected", "rejected"),
+]
+
+
+def fig_search_funnel() -> Path | None:
+    """Where the 25 screened records came from and how each was disposed of."""
+    import csv
+
+    if not LEDGER.exists():
+        print(f"[figures] no ledger at {LEDGER}", file=sys.stderr)
+        return None
+    rows = list(csv.DictReader(LEDGER.open(encoding="utf-8")))
+    disp = Counter(r["screening_disposition"] for r in rows)
+    fam = Counter(r["family"] for r in rows)
+
+    fig, axes = plt.subplots(1, 2, figsize=(9.6, 4.1))
+    left, right = axes
+
+    labels = [name for key, name in DISPOSITION_ORDER if key in disp]
+    counts = [disp[key] for key, name in DISPOSITION_ORDER if key in disp]
+    keep = {"recommended as primary", "recommended as comparator", "selected as tooling"}
+    colours = ["#0d6ba6" if name in keep else ("#ab2a1e" if name == "rejected" else "#4a5765")
+               for name in labels]
+    y = np.arange(len(labels))
+    left.barh(y, counts, color=colours, height=0.62)
+    left.set_yticks(y, labels, fontsize=7.6)
+    left.invert_yaxis()
+    left.set_xlabel("records", fontsize=8.5)
+    left.set_title(f"disposition of {len(rows)} screened records", fontsize=9.5)
+    for yi, c in zip(y, counts):
+        left.text(c + 0.08, yi, str(c), va="center", fontsize=7.6)
+    left.set_xlim(0, max(counts) + 1.2)
+
+    fams = sorted(fam.items(), key=lambda kv: (-kv[1], kv[0]))
+    y2 = np.arange(len(fams))
+    right.barh(y2, [n for _, n in fams], color="#33414f", height=0.62)
+    right.set_yticks(y2, [k.replace("-", " ") for k, _ in fams], fontsize=7.6)
+    right.invert_yaxis()
+    right.set_xlabel("records", fontsize=8.5)
+    right.set_title("probability families represented in the screen", fontsize=9.5)
+    for axis in (left, right):
+        axis.tick_params(labelsize=8)
+        axis.spines[["top", "right"]].set_visible(False)
+    fig.tight_layout()
+    return _save(fig, "figure_13_search_funnel.png")
+
+
+def fig_architecture() -> Path:
+    """The inference path both models share, and what each reduction adds on top of it."""
+    from matplotlib.patches import FancyArrowPatch, FancyBboxPatch
+
+    fig, ax = plt.subplots(figsize=(9.8, 4.4))
+    ax.set_xlim(0, 100)
+    ax.set_ylim(0, 56)
+    ax.axis("off")
+
+    def box(x, y, w, h, title, sub, colour="#111a24"):
+        ax.add_patch(FancyBboxPatch((x, y), w, h, boxstyle="round,pad=0.4,rounding_size=0.8",
+                                    linewidth=1.0, edgecolor=colour, facecolor="#f4f6f3"))
+        ax.text(x + w / 2, y + h * 0.62, title, ha="center", va="center", fontsize=8.2,
+                color="#111a24")
+        ax.text(x + w / 2, y + h * 0.26, sub, ha="center", va="center", fontsize=6.6,
+                color="#4a5765")
+
+    def arrow(x1, y1, x2, y2, colour="#111a24"):
+        ax.add_patch(FancyArrowPatch((x1, y1), (x2, y2), arrowstyle="-|>", mutation_scale=8,
+                                     linewidth=0.9, color=colour))
+
+    box(0.5, 24, 15, 11, "input", "32 x 32 x 3, normalised")
+    box(19, 22, 18, 15, "VGG-16-BN trunk", "spectral normalisation\non every layer")
+    box(40.5, 26, 9, 7, "z", "512-d")
+
+    box(53, 43, 17, 10.5, "alpha head", "exp(g1(z))", "#0d6ba6")
+    box(53, 30.5, 17, 10.5, "p head", "softmax(g2(z))", "#0d6ba6")
+    box(53, 18, 17, 10.5, "tau head", "softplus(g3(z))", "#0d6ba6")
+    box(53, 3, 17, 10.5, "last-layer Laplace", "ICLA, identity curvature", "#1c4fbe")
+
+    box(73.5, 25, 14.5, 17, "flexible\nDirichlet", "moments mu, Var", "#0d6ba6")
+    box(73.5, 4.5, 14.5, 11.5, "MC predictive", "mean over S draws", "#1c4fbe")
+
+    box(91, 16, 8.5, 18, "report", "EU\nTU\nAU", "#111a24")
+
+    arrow(15.5, 29.5, 18.8, 29.5)
+    arrow(37, 29.5, 40.3, 29.5)
+    arrow(49.5, 30.5, 52.8, 48)
+    arrow(49.5, 29.5, 52.8, 35.7)
+    arrow(49.5, 28.5, 52.8, 23)
+    arrow(49.5, 27, 52.8, 8, colour="#1c4fbe")
+    arrow(70, 48, 74.5, 38)
+    arrow(70, 35.7, 73.3, 33.5)
+    arrow(70, 23, 73.3, 28)
+    arrow(70, 8, 73.3, 10)
+    arrow(88, 33.5, 90.8, 27)
+    arrow(88, 10, 90.8, 17)
+
+    ax.text(0.5, 53.5, "shared by all five configurations", fontsize=7.4, color="#4a5765")
+    ax.text(53, 55.2, "evidential reduction  A1, A2", fontsize=7.4, color="#0d6ba6")
+    ax.text(53, 0.2, "Laplace reduction  A3        B1, B2 use the MAP softmax of the same trunk",
+            fontsize=7.4, color="#1c4fbe")
+    fig.tight_layout()
+    return _save(fig, "figure_01_architecture.png")
+
+
+def fig_spectral_norm_ablation() -> Path | None:
+    """What the per-layer Lipschitz budget actually cost, on identical data and schedules."""
+    if not (MAIN_RESULTS.exists() and NOSN_RESULTS.exists()):
+        print("[figures] spectral-norm ablation results missing", file=sys.stderr)
+        return None
+    on = json.loads(MAIN_RESULTS.read_text(encoding="utf-8"))["aggregate"]
+    off = json.loads(NOSN_RESULTS.read_text(encoding="utf-8"))["aggregate"]
+
+    metrics = [("top1", "Top-1 accuracy", 4), ("nll", "negative log-likelihood", 4),
+               ("ece", "expected calibration error", 4)]
+    fig, axes = plt.subplots(1, 3, figsize=(9.8, 3.3), sharex=True)
+    short = {m: m.split("_")[0] for m in MODEL_NAMES}
+    x = np.arange(len(MODEL_NAMES))
+    for axis, (key, title, dp) in zip(axes, metrics):
+        a = np.array([on[m][key]["mean"] for m in MODEL_NAMES])
+        b = np.array([off[m][key]["mean"] for m in MODEL_NAMES])
+        ea = np.array([on[m][key]["std"] for m in MODEL_NAMES])
+        eb = np.array([off[m][key]["std"] for m in MODEL_NAMES])
+        axis.bar(x - 0.19, a, width=0.36, yerr=ea, capsize=2, color="#33414f",
+                 label="with spectral norm")
+        axis.bar(x + 0.19, b, width=0.36, yerr=eb, capsize=2, color="#c8cfc9",
+                 edgecolor="#33414f", hatch="///", label="without")
+        for xi, (va, vb) in enumerate(zip(a, b)):
+            axis.text(xi + 0.19, vb, f"{vb - va:+.{dp - 1}f}" if key != "top1"
+                      else f"{(vb - va) * 100:+.2f}", ha="center",
+                      va="bottom" if vb >= va else "top", fontsize=6.6, color="#ab2a1e")
+        axis.set_title(title, fontsize=9)
+        axis.tick_params(labelsize=8)
+        axis.spines[["top", "right"]].set_visible(False)
+    axes[0].set_xticks(x, [short[m] for m in MODEL_NAMES])
+    axes[0].set_xlabel("configuration", fontsize=8.5)
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="lower center", ncol=2, frameon=False, fontsize=8)
+    fig.tight_layout(rect=(0, 0.07, 1, 1))
+    return _save(fig, "figure_14_spectral_norm_ablation.png")
+
+
+def fig_calibration_families(store: dict, seed: str) -> Path:
+    """Uncalibrated, temperature-scaled, and Dirichlet-scaled, on the four scores that matter."""
+    agg = json.loads(MAIN_RESULTS.read_text(encoding="utf-8"))["aggregate"]
+    picks = ["B1_ce", "B2_ce_temperature", "A1_fedl", "A2_fedl_dirichlet"]
+    metrics = [("ece", "ECE"), ("adaptive_ece", "adaptive ECE"), ("brier", "Brier"),
+               ("nll", "NLL")]
+    fig, axes = plt.subplots(1, 4, figsize=(9.8, 3.0), sharey=False)
+    labels = ["B1\nCE", "B2\n+ temp", "A1\nF-EDL", "A2\n+ Dirichlet"]
+    for axis, (key, title) in zip(axes, metrics):
+        means = np.array([agg[m][key]["mean"] for m in picks])
+        stds = np.array([agg[m][key]["std"] for m in picks])
+        best = int(np.argmin(means))
+        axis.bar(range(len(picks)), means, yerr=stds, capsize=2.5, width=0.62,
+                 color=["#0d6ba6" if i == best else "#c8cfc9" for i in range(len(picks))],
+                 edgecolor="#33414f", linewidth=0.7)
+        for i, v in enumerate(means):
+            axis.text(i, v, f"{v:.4f}", ha="center", va="bottom", fontsize=6.8)
+        axis.set_title(title, fontsize=9)
+        axis.set_xticks(range(len(picks)), labels, fontsize=7.4)
+        axis.tick_params(labelsize=8)
+        axis.spines[["top", "right"]].set_visible(False)
+    axes[0].set_ylabel("lower is better", fontsize=8)
+    fig.tight_layout()
+    return _save(fig, "figure_15_calibration_families.png", suffix=seed)
+
+
+def fig_uncertainty_vs_correctness(store: dict, seed: str) -> Path:
+    """Do the uncertainty quantities separate the images the model gets right from those it does not?
+
+    Step histograms on a logarithmic count axis, because on a linear one every panel is a single spike
+    at zero and the separation the report claims is invisible. Each panel carries the AUROC of its own
+    score against the binary error event, computed from the same arrays being plotted.
+    """
+    models = ["B1_ce", "A1_fedl", "A3_laplace_icla"]
+    fig, axes = plt.subplots(1, 3, figsize=(9.8, 3.2))
+    labels = np.asarray(store[seed]["A1_fedl__test__labels"])
+    for axis, model in zip(axes, models):
+        d = store[seed]
+        total = np.asarray(d[f"{model}__test__total"], dtype=np.float64)
+        correct = np.asarray(d[f"{model}__test__mean"]).argmax(1) == labels
+        bins = np.linspace(0.0, 0.85, 34)
+        axis.hist(total[correct], bins=bins, histtype="step", linewidth=1.1, color="#33414f",
+                  label=f"correct ({correct.sum():,})")
+        axis.hist(total[~correct], bins=bins, histtype="step", linewidth=1.1, color="#ab2a1e",
+                  label=f"wrong ({(~correct).sum():,})")
+        # the same abstention rule the browser uses: retain the most confident until risk passes 5 %
+        order = np.argsort(total)
+        risk = 1.0 - np.cumsum(correct[order]) / np.arange(1, correct.size + 1)
+        kept = np.where(risk <= 0.05)[0]
+        thr = float(total[order][kept[-1] + 1]) if kept.size else float(total[order][0])
+        axis.axvline(thr, linestyle="--", linewidth=1.0, color="#111a24")
+        axis.text(thr, 0.62, f" abstain\n beyond {thr:.3f}", fontsize=6.6,
+                  va="center", transform=axis.get_xaxis_transform())
+        axis.set_yscale("log")
+        axis.set_xlim(0, 0.85)
+        axis.set_ylim(0.8, 2e4)
+        axis.set_title(f"{model.split('_')[0]}  error AUROC, this seed: "
+                     f"{ood_auc(total, ~correct):.4f}", fontsize=9)
+        axis.set_xlabel("total uncertainty", fontsize=8)
+        axis.tick_params(labelsize=8)
+        axis.spines[["top", "right"]].set_visible(False)
+    axes[0].set_ylabel("test images", fontsize=8)
+    axes[0].legend(fontsize=7, frameon=False, loc="upper right", bbox_to_anchor=(1.0, 0.86))
+    fig.tight_layout()
+    return _save(fig, "figure_16_uncertainty_vs_correctness.png", suffix=seed)
+
+
+def ood_auc(score: np.ndarray, positive: np.ndarray) -> float:
+    """Ranking quality of ``score`` against the boolean ``positive``, by rank sum.
+
+    Written here rather than imported so the number printed in the title is computed from exactly the
+    arrays the panel draws, not from the aggregate table.
+    """
+    n_pos = int(positive.sum())
+    n_neg = int(positive.size - n_pos)
+    if n_pos == 0 or n_neg == 0:
+        return float("nan")
+    order = np.argsort(score, kind="mergesort")
+    ranks = np.empty(score.size, dtype=np.float64)
+    ranks[order] = np.arange(1, score.size + 1)
+    return float((ranks[positive].sum() - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg))
+
 def main(results_glob: str, reuse: bool = False) -> int:
     files = sorted(glob.glob(results_glob))
     if not files:
@@ -499,6 +744,9 @@ def main(results_glob: str, reuse: bool = False) -> int:
                  fig_uncertainty_decomposition(store, seed), fig_confusion(store, seed)]
     made += [fig_ood(store, seeds), fig_evidence_anatomy(store, seeds[0]),
              fig_lambda_evidence(out_root, payload["seeds"])]
+    made += [fig_architecture(), fig_search_funnel(), fig_spectral_norm_ablation()]
+    made += [fig_calibration_families(store, seeds[0]),
+             fig_uncertainty_vs_correctness(store, seeds[0])]
     made = [m for m in made if m is not None]
 
     summary = {"results_file": str(path), "seeds": payload["seeds"],
