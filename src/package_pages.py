@@ -79,9 +79,10 @@ def main(check_only: bool) -> int:
     if check_only:
         return 0
 
-    if BUILD.exists():
-        shutil.rmtree(BUILD)
-    shutil.copytree(WEBAPP, BUILD)
+    # The build folder doubles as the working tree of the gh-pages branch, so its .git directory
+    # must survive a rebuild; copying over an existing tree keeps it in place.
+    BUILD.mkdir(exist_ok=True)
+    shutil.copytree(WEBAPP, BUILD, dirs_exist_ok=True)
     (BUILD / "README.md").write_text(README, encoding="utf-8")
     built, built_count = tree_size(BUILD)
     print(f"[pages] wrote {BUILD.relative_to(ROOT)}: {built:.1f} MB, {built_count} files")
