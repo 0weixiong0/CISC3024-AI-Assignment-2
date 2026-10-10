@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CIFAR-10 under flexible evidential and Laplace reduction — the measurements</title>
+<meta name="description" content="Register of the CISC3024 AI Assignment #2 experiment: five configurations, three seeds, CIFAR-10 with two out-of-distribution controls. Every value is read from the same reduction that produced the report tables.">
+<link rel="stylesheet" href="styles.css">
+<link rel="alternate" href="index.html">
+</head>
+<body>
+
+<header class="masthead">
+  <div class="masthead__row">
+    <h1>CIFAR&#8209;10, reduced two ways</h1>
+    <p class="masthead__series">Observation register &middot; measurements</p>
+  </div>
+  <p class="masthead__deck">A flexible evidential network (F&#8209;EDL) and an identity&#8209;curvature Laplace
+  approximation (ICLA) trained on the same frozen split as a spectral&#8209;normalised cross&#8209;entropy
+  baseline, then read against their own predictive posteriors. This register is the experiment's
+  own output: every figure below comes from the files listed in the colophon, produced by the code
+  linked there, with no number re&#8209;entered by hand.</p>
+  <dl class="head-fields">
+    <div><dt>Station</dt><dd>CIFAR&#8209;10 test split &mdash; 10&thinsp;000 images</dd></div>
+    <div><dt>Instrument</dt><dd>VGG&#8209;16&#8209;BN, <span id="field-parameters">14&thinsp;728&thinsp;266</span> trainable parameters</dd></div>
+    <div><dt>Epoch</dt><dd>100 scheduled, stopped on validation NLL</dd></div>
+    <div><dt>Split seed</dt><dd class="num">20261006</dd></div>
+    <div><dt>Reduction</dt><dd>3 seeds &middot; 64 Monte&#8209;Carlo draws</dd></div>
+    <div><dt>Observer</dt><dd>Qoder (AI), under supervision</dd></div>
+  </dl>
+</header>
+
+<div class="shell">
+
+  <nav class="rail" aria-label="Register entries">
+    <span class="rail__label">Entries</span>
+    <div id="rail-ticks"></div>
+  </nav>
+
+  <main class="entries" id="entries">
+
+    <section class="entry" id="I" data-open="true">
+      <a class="entry__head" href="#I">
+        <span class="entry__no">I</span>
+        <h2 class="entry__title">Reduction of the five configurations</h2>
+        <p class="entry__abs">Accuracy, proper scores and calibration for each configuration, averaged
+        over three seeds. The whisker beside a value is one standard deviation; a struck cell is a
+        quantity the configuration does not define, not a zero.</p>
+        <p class="entry__mark">Mean of three seeds &middot; frozen test split</p>
+      </a>
+      <div class="entry__body" data-fill="headline"></div>
+    </section>
+
+    <section class="entry" id="II">
+      <a class="entry__head" href="#II">
+        <span class="entry__no">II</span>
+        <h2 class="entry__title">Reliability &mdash; confidence against accuracy</h2>
+        <p class="entry__abs">Fifteen equal&#8209;width bins over the test split. A bin is drawn as the
+        measured accuracy it delivered, so distance from the diagonal is the reading.</p>
+        <p class="entry__mark" id="mark-reliability">One plate per configuration</p>
+      </a>
+      <div class="entry__body" data-fill="reliability"></div>
+    </section>
+
+    <section class="entry" id="III">
+      <a class="entry__head" href="#III">
+        <span class="entry__no">III</span>
+        <h2 class="entry__title">Selective prediction &mdash; risk against coverage</h2>
+        <p class="entry__abs">Abstain on the least confident images first; the curve is the error that
+        remains at each retained fraction.</p>
+        <p class="entry__mark" id="mark-risk">100 coverage steps</p>
+      </a>
+      <div class="entry__body" data-fill="risk"></div>
+    </section>
+
+    <section class="entry" id="IV">
+      <a class="entry__head" href="#IV">
+        <span class="entry__no">IV</span>
+        <h2 class="entry__title">Out&#8209;of&#8209;distribution controls</h2>
+        <p class="entry__abs">Two negative controls held against the station: SVHN, near, and
+        Tiny&#8209;ImageNet, far. Ranking quality is AUROC; FPR at 95% sensitivity is the operating cost.</p>
+        <p class="entry__mark">Near and far &middot; three scores each</p>
+      </a>
+      <div class="entry__body" data-fill="ood"></div>
+    </section>
+
+    <section class="entry" id="V">
+      <a class="entry__head" href="#V">
+        <span class="entry__no">V</span>
+        <h2 class="entry__title">Uncertainty decomposition</h2>
+        <p class="entry__abs">Epistemic and aleatoric terms from the same predictive posterior. Three of
+        the five configurations have no epistemic term by construction, and those cells are struck.</p>
+        <p class="entry__mark">Total uncertainty = epistemic + aleatoric</p>
+      </a>
+      <div class="entry__body" data-fill="decomposition"></div>
+    </section>
+
+    <section class="entry" id="VI">
+      <a class="entry__head" href="#VI">
+        <span class="entry__no">VI</span>
+        <h2 class="entry__title">Evidence anatomy &mdash; one image at a time</h2>
+        <p class="entry__abs">Forty&#8209;eight images from the test split, selected by the reduction for
+        their position in the uncertainty field. Select one to read its full Dirichlet evidence, mode,
+        concentration, mean and variance.</p>
+        <p class="entry__mark" id="mark-anatomy">Per&#8209;class quantities</p>
+      </a>
+      <div class="entry__body" data-fill="anatomy"></div>
+    </section>
+
+    <section class="entry" id="VII">
+      <a class="entry__head" href="#VII">
+        <span class="entry__no">VII</span>
+        <h2 class="entry__title">Seed spread</h2>
+        <p class="entry__abs">The three independent training runs, plotted rather than averaged, so a
+        one&#8209;seed difference can be seen as one.</p>
+        <p class="entry__mark">20261006 &middot; 20261007 &middot; 20261008</p>
+      </a>
+      <div class="entry__body" data-fill="seeds"></div>
+    </section>
+
+    <section class="entry" id="VIII">
+      <a class="entry__head" href="#VIII">
+        <span class="entry__no">VIII</span>
+        <h2 class="entry__title">Ablations &mdash; curvature and Lipschitz budget</h2>
+        <p class="entry__abs">The same reduction run with identity, kron and no curvature in the Laplace
+        posterior, and once without spectral normalisation. Ablations are dashed; a run that is not yet
+        complete is half&#8209;height.</p>
+        <p class="entry__mark" id="mark-variants">Recorded run variants</p>
+      </a>
+      <div class="entry__body" data-fill="variants"></div>
+    </section>
+
+    <section class="entry" id="IX">
+      <a class="entry__head" href="#IX">
+        <span class="entry__no">IX</span>
+        <h2 class="entry__title">Post&#8209;hoc instruments</h2>
+        <p class="entry__abs">The fitted settings of the three layers that sit on top of a trained
+        network: the Laplace prior precision and its evidence, the temperature, and the Dirichlet
+        rescaling.</p>
+        <p class="entry__mark">Fitted on validation only</p>
+      </a>
+      <div class="entry__body" data-fill="instruments"></div>
+    </section>
+
+    <section class="entry" id="X">
+      <a class="entry__head" href="#X">
+        <span class="entry__no">X</span>
+        <h2 class="entry__title">Cost, provenance and limits</h2>
+        <p class="entry__abs">Wall&#8209;clock and memory actually measured on the machine named in the
+        plan, the files every value came from, and the limits a reader should hold while judging
+        the numbers.</p>
+        <p class="entry__mark">Measured, not estimated</p>
+      </a>
+      <div class="entry__body" data-fill="cost"></div>
+    </section>
+
+  </main>
+</div>
+
+<footer class="colophon" id="colophon"></footer>
+
+<script src="data/dataset.js"></script>
+<script src="register.js"></script>
+</body>
+</html>

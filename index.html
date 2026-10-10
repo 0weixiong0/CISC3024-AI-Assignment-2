@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Point the instrument at something — CIFAR-10 classifier bench</title>
+<meta name="description" content="Draw a 32x32 specimen or hand the instrument one of your own images, and watch a cross-entropy baseline and a flexible evidential network disagree about how much they know. Both networks run in this browser tab; nothing is uploaded.">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body class="bench">
+
+<header class="masthead">
+  <div class="masthead__row">
+    <h1>Point the instrument at something</h1>
+    <p class="masthead__series">Observation register &middot; live bench</p>
+  </div>
+  <p class="masthead__deck">Two trained networks are loaded into this tab and run here, on your
+    machine. Draw a specimen, or hand the instrument a picture of your own, and read what each one
+    believes. The baseline reports a probability and nothing else. The evidential network also reports
+    how much evidence stood behind that probability &mdash; and when almost none did, it declines to
+    answer. That difference is the whole experiment, and it is easier to see than to be told.</p>
+  <dl class="head-fields">
+    <div><dt>Instrument</dt><dd>two VGG&#8209;16&#8209;BN graphs, 59 MB each</dd></div>
+    <div><dt>Runtime</dt><dd id="field-runtime">not loaded yet</dd></div>
+    <div><dt>Specimen</dt><dd id="field-specimen">blank plate</dd></div>
+    <div><dt>Decline line</dt><dd id="field-decline">not computed yet</dd></div>
+    <div><dt>Trained on</dt><dd>CIFAR&#8209;10, split seed <span class="num">20261006</span></dd></div>
+    <div><dt>Measurements</dt><dd><a href="register.html">the full register &rarr;</a></dd></div>
+  </dl>
+</header>
+
+<p class="bench__status" id="bench-status" role="status">Loading the two networks &mdash; 118 MB is
+  being read from this folder, not from the network.</p>
+
+<main class="bench__grid">
+
+  <section class="bench__plate">
+    <h2 class="sub">Specimen</h2>
+    <div class="stage">
+      <canvas id="specimen" width="32" height="32" aria-label="Drawing canvas, 32 by 32 pixels, the size the instrument was trained on"></canvas>
+      <p class="stage__hint" id="stage-hint">Draw with the pointer. The instrument sees the 32&times;32
+        square to the left at its true size.</p>
+    </div>
+
+    <div class="controls" role="group" aria-label="Brush size">
+      <span class="controls__label">Brush</span>
+      <button class="pick" type="button" data-brush="1" aria-pressed="true">1 px</button>
+      <button class="pick" type="button" data-brush="2" aria-pressed="false">2 px</button>
+      <button class="pick" type="button" data-brush="4" aria-pressed="false">4 px</button>
+      <button class="pick" type="button" id="tool-eraser" aria-pressed="false">Eraser</button>
+    </div>
+    <div class="controls" role="group" aria-label="Plate">
+      <span class="controls__label">Plate</span>
+      <button class="pick" type="button" id="act-clear">Clear</button>
+      <button class="pick" type="button" id="act-noise">Fill with noise</button>
+      <button class="pick" type="button" id="act-photo">Choose an image&hellip;</button>
+      <input type="file" id="input-photo" accept="image/*" hidden>
+    </div>
+
+    <details class="picker" open>
+      <summary class="picker__summary">Choose a specimen &mdash; all 10&thinsp;000 test images</summary>
+      <p class="small picker__lede">Pick by class, or order the whole station by how uncertain an
+        instrument was about each image. Cells carry a hairline whose length is that uncertainty; a
+        struck diagonal marks an image the baseline answered wrongly. Nothing here is a curated
+        subset &mdash; this is every test image, and the numbers on each one came from the same
+        evaluation the report tables were aggregated from.</p>
+      <div class="controls" role="group" aria-label="Class">
+        <span class="controls__label">Class</span><span id="pick-classes"></span>
+      </div>
+      <div class="controls" role="group" aria-label="Outcome">
+        <span class="controls__label">Outcome</span><span id="pick-outcomes"></span>
+      </div>
+      <div class="controls" role="group" aria-label="Order by">
+        <span class="controls__label">Order</span><span id="pick-sortkeys"></span>
+        <span class="controls__label">of</span><span id="pick-sortmodels"></span>
+      </div>
+      <p class="wall__count" id="pick-count" role="status">loading the index&hellip;</p>
+      <div class="picker__grid" id="pick-grid" tabindex="0"
+           aria-label="Test images; scroll to see more"></div>
+      <p class="small wall__more" id="pick-more"></p>
+    </details>
+
+    <p class="small bench__note">Nothing leaves this page. The image is resized to 32&times;32,
+      normalised with the CIFAR&#8209;10 constants, and fed to the two graphs in your browser tab.
+      The instrument was trained on 32&times;32 thumbnails of real objects, so a photograph of your
+      cat at arm's length is outside its station &mdash; which is exactly what the decline line is for.</p>
+    <p class="small bench__note">One difference from the register you should know about: a reference
+      specimen reaches this page as an 8&#8209;bit PNG, so the plate re&#8209;reads it one quantisation
+      step away from the float tensors the report tables used. Run against identical inputs, the two
+      implementations agree to every digit shown here &mdash; on <code>test_00284</code> both give
+      confidence 0.96273, total evidence 3185.8 and &tau; 5.922 &mdash; while the register's float
+      values for the same image read 0.95933 and 3051.6. Class decisions never differ; evidence sums,
+      which pass through an exponential, can move a few percent.</p>
+  </section>
+
+  <section class="bench__instruments">
+    <article class="instrument" id="inst-b1">
+      <header class="instrument__head">
+        <h2 class="entry__title">Baseline</h2>
+        <p class="instrument__id">B1 &middot; cross&#8209;entropy, softmax</p>
+      </header>
+      <div class="instrument__body">
+        <svg class="bars" id="bars-b1" viewBox="0 0 384 150" role="img"
+             aria-label="Baseline class probabilities"></svg>
+        <dl class="readout" id="read-b1"></dl>
+      </div>
+      <p class="instrument__foot">No uncertainty term exists for this instrument: one weight vector,
+        one answer. <span class="strike-word">Epistemic</span> is struck because the quantity is not
+        defined here, not because it measured zero.</p>
+    </article>
+
+    <article class="instrument" id="inst-a1">
+      <header class="instrument__head">
+        <h2 class="entry__title">Evidential</h2>
+        <p class="instrument__id">A1 &middot; flexible Dirichlet</p>
+      </header>
+      <div class="instrument__body">
+        <svg class="bars" id="bars-a1" viewBox="0 0 384 150" role="img"
+             aria-label="Evidential predictive probabilities and Dirichlet evidence"></svg>
+        <dl class="readout" id="read-a1"></dl>
+      </div>
+      <p class="instrument__verdict" id="verdict-a1"></p>
+    </article>
+
+    <article class="instrument instrument--all">
+      <header class="instrument__head">
+        <h2 class="entry__title">All five configurations</h2>
+        <p class="instrument__id">the same specimen, five reductions</p>
+      </header>
+      <div class="table-wrap" id="all-configs"></div>
+      <p class="instrument__foot">B2 and A2 are post&#8209;hoc calibrations of B1 and A1; A3 puts a
+        Laplace distribution on B1's last layer. They are computed here from the exported parameters,
+        which is why they agree with the register to the digit.</p>
+    </article>
+  </section>
+
+</main>
+
+<footer class="colophon">
+  <div><h2>What you are looking at</h2><p>The live half of the CISC3024 AI Assignment 2 web component.
+    The two graphs are the trained networks exported by <code>src/export_onnx.py</code>; the
+    Dirichlet moments, temperature scaling, Dirichlet scaling and Laplace weight draws are recomputed
+    in <code>bench.js</code> from <code>data/instruments.json</code>, with the same formulas the
+    Python uses. <code>webapp/model/verification.json</code> records the parity check between the two
+    implementations.</p></div>
+  <div><h2>If the instruments will not load</h2><p>Browsers refuse to fetch a 59 MB model from a
+    <code>file://</code> page. Serve the folder instead: from the project root run
+    <code>python -m http.server 8801 --directory webapp</code> and open
+    <code>http://127.0.0.1:8801/</code>. The <a href="register.html">measurement register</a> needs no
+    server and opens from disk.</p></div>
+  <div><h2>Measured, not simulated</h2><p>Every probability shown here comes from weights trained on
+    47&thinsp;500 images with a 2&thinsp;500&#8209;image validation split, evaluated once on 10&thinsp;000
+    test images. The decline line is the total uncertainty at which the test risk&#8209;coverage curve
+    passes 5&nbsp;% risk &mdash; the same curve printed in register entry III.</p></div>
+</footer>
+
+<script src="ort/ort.all.min.js"></script>
+<script src="bench.js"></script>
+</body>
+</html>
