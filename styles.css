@@ -745,8 +745,9 @@ u { text-decoration-thickness: 1px; text-underline-offset: 3px; }
 svg.bars text { font-family: var(--mono); font-size: 9.5px; fill: var(--ink-weak); }
 svg.bars text.value { fill: var(--ink); }
 svg.bars text.rowlabel { font-family: var(--grotesque); font-stretch: 88%; fill: var(--ink-mid); }
-svg.bars text.head { font-family: var(--grotesque); font-size: 9px; font-stretch: 82%;
-  letter-spacing: 0.08em; text-transform: uppercase; fill: var(--ink-weak); }
+/* mono, because the grotesque subset carries no Greek: the header names alpha as a symbol. */
+svg.bars text.head { font-family: var(--mono); font-size: 9px; letter-spacing: 0.06em;
+  text-transform: uppercase; fill: var(--ink-weak); }
 svg.bars path.series { stroke-width: 1.6; }
 .instrument--all .table-wrap { margin-top: 12px; }
 

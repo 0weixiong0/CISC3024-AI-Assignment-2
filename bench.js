@@ -241,13 +241,13 @@
   var CLASSES = [];
   function bars(svg, probs, colour, marks) {
     while (svg.firstChild) svg.removeChild(svg.firstChild);
-    var rowH = 14, x0 = 62, w = 210, head = 22;
+    var rowH = 14, x0 = 74, w = 200, head = 22;
     text(svg, 0, 9, "class", "head");
     text(svg, x0, 9, "probability", "head");
     if (marks) text(svg, x0 + w + 52, 9, "evidence  α − 1", "head");
     CLASSES.forEach(function (name, i) {
       var y = i * rowH + head;
-      text(svg, 0, y + 3, name.slice(0, 8), "rowlabel");
+      text(svg, 0, y + 3, name, "rowlabel");
       line(svg, x0, y, x0 + w, y, "grid");
       line(svg, x0, y, x0 + Math.max(0.6, probs[i] * w), y, "series", colour, 1.6);
       text(svg, x0 + w + 6, y + 3, probs[i].toFixed(4), "value");
@@ -403,6 +403,34 @@
     });
   }
 
+  /* ?specimen=NNNNN loads one test image into the plate once the instruments are ready, so a
+     particular case can be linked from the report instead of described in prose. */
+  function deepLinkedSpecimen() {
+    var m = /[?&]specimen=(\d{1,5})/.exec(window.location.search);
+    return m ? Math.min(parseInt(m[1], 10), 9999) : null;
+  }
+
+  var plateIndex = null;
+
+  function specimenLabel(i) {
+    return "test_" + String(i).padStart(5, "0") + " \u00b7 true class " +
+      (WALL.idx ? WALL.idx.records[i].c : "reading the index\u2026");
+  }
+
+  function loadSpecimenByIndex(i) {
+    var probe = new Image();
+    plateIndex = i;
+    probe.onload = function () {
+      imageToPlate(probe);
+      specimenField.textContent = specimenLabel(i);
+      run();
+    };
+    probe.onerror = function () {
+      specimenField.textContent = "specimen " + i + " could not be read";
+    };
+    probe.src = "data/test/" + String(i).padStart(5, "0") + ".png";
+  }
+
   function boot() {
     if (location.protocol === "file:") {
       setStatus("error", "Opened from disk, so the browser will not let this page read the two " +
@@ -430,8 +458,11 @@
       buildWall();
       runtimeField.textContent = sessions[0].inputNames ? "onnxruntime-web, " +
         (SESS.webgpu ? "WebGPU" : "WASM (CPU)") : "onnxruntime-web";
-      setStatus("ready", "Ready. Draw on the plate, or pick a reference specimen.");
-      run();
+      var want = deepLinkedSpecimen();
+      setStatus("ready", want === null
+        ? "Ready. Draw on the plate, or pick a specimen below."
+        : "Ready. Loading test image " + want + ".");
+      if (want === null) run(); else loadSpecimenByIndex(want);
     }).catch(function (err) {
       setStatus("error", "The instruments did not load: " + (err.message || err) + ". Check that " +
         "<code>model/baseline.onnx</code> and <code>model/evidential.onnx</code> exist — they are " +
@@ -595,16 +626,9 @@
         " \u00b7 A1 total " + r.m.A1_fedl[4].toFixed(5);
       (function (rec) {
         b.addEventListener("click", function () {
-          var probe = new Image();
-          probe.onload = function () {
-            imageToPlate(probe);
-            specimenField.textContent = "test_" + String(rec.i).padStart(5, "0") +
-              " \u00b7 true class " + rec.c;
-            run();
-            document.querySelector(".bench__grid").scrollIntoView({ block: "start",
-              behavior: scrollBehaviour() });
-          };
-          probe.src = "data/test/" + String(rec.i).padStart(5, "0") + ".png";
+          loadSpecimenByIndex(rec.i);
+          document.querySelector(".bench__grid").scrollIntoView({ block: "start",
+            behavior: scrollBehaviour() });
         });
       })(r);
       grid.appendChild(b);
@@ -652,6 +676,7 @@
         }, { root: document.getElementById("pick-grid"), rootMargin: "200px" })
           .observe(document.getElementById("pick-grid"));
       }
+      if (plateIndex !== null) specimenField.textContent = specimenLabel(plateIndex);
       resort();
     }).catch(function (err) {
       document.getElementById("pick-count").textContent =
