@@ -1,0 +1,10 @@
+# Versions this submission was actually run with (Python 3.12.10, Windows, CUDA 12.8).
+# laplace-torch and asdfghjkl are used by the kron-curvature cross-check in tests/test_laplace_icla.py.
+torch==2.7.1
+numpy==2.4.6
+pillow==12.2.0
+matplotlib==3.11.0
+onnx==1.22.0
+onnxruntime==1.26.0
+laplace-torch==0.2.3
+pytest==9.1.1

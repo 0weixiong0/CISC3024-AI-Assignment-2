@@ -1,0 +1,518 @@
+"""Collect the final per-image predictions and draw every figure used by the report.
+
+Project : CISC3024 AI Assignment #2 (Pattern Recognition, University of Macau)
+Author  : AI-generated implementation (Qoder). The student wrote no code.
+
+Run after ``run_matrix.py`` has finished::
+
+    python src/make_figures.py --results runs/full_*/matrix_results.json
+
+Outputs
+    analysis/test_predictions.npz    per-image mean/variance/epistemic/aleatoric, all configs
+    analysis/summary.json            scalars the report quotes directly
+    report_assets/figure_NN_*.png    300 dpi figures, English labels, print-ready
+
+Design note: the figures are generated from the same code path that produced the reported numbers, so
+a figure cannot silently disagree with its table. Curves that need per-image quantities are recomputed
+here from the stored checkpoints rather than re-derived from aggregate statistics.
+"""
+
+from __future__ import annotations
+
+import argparse
+import glob
+import json
+import os
+import sys
+from pathlib import Path
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import numpy as np
+import torch
+from matplotlib import gridspec
+from PIL import Image
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import data as D  # noqa: E402
+from evaluate import collect_predictive  # noqa: E402
+from metrics import (  # noqa: E402
+    expected_calibration_error, ood_detection_scores, reliability_bins, risk_coverage_curve,
+    selective_prediction_metrics,
+)
+from run_matrix import DEVICE, MODEL_NAMES, _head, build  # noqa: E402
+
+ROOT = Path(__file__).resolve().parent.parent
+ANALYSIS = ROOT / "analysis"
+ASSETS = ROOT / "report_assets"
+
+CLASS_NAMES = np.array(["airplane", "automobile", "bird", "cat", "deer", "dog", "frog",
+                        "horse", "ship", "truck"])
+
+CONFIG_LABEL = {
+    "B1_ce": "B1  cross-entropy",
+    "B2_ce_temperature": "B2  CE + temperature",
+    "A1_fedl": "A1  F-EDL (flexible Dirichlet)",
+    "A2_fedl_dirichlet": "A2  F-EDL + Dirichlet scaling",
+    "A3_laplace_icla": "A3  CE + last-layer Laplace (ICLA)",
+}
+CONFIG_COLOR = {
+    "B1_ce": "#7f8c8d", "B2_ce_temperature": "#2980b9", "A1_fedl": "#c0392b",
+    "A2_fedl_dirichlet": "#e67e22", "A3_laplace_icla": "#27ae60",
+}
+
+plt.rcParams.update({
+    "figure.dpi": 110, "savefig.dpi": 300, "font.size": 9, "axes.titlesize": 10,
+    "axes.labelsize": 9, "legend.fontsize": 8, "axes.grid": True, "grid.alpha": 0.25,
+    "axes.spines.top": False, "axes.spines.right": False, "figure.autolayout": False,
+})
+
+
+# ================================================================================================
+# Collection
+# ================================================================================================
+def load_models(payload: dict, out_root: Path):
+    """Rebuild the B1 and A1 backbones for every seed from their stored checkpoints."""
+    from calibrate import CalibratedModel, DirichletScaler, TemperatureScaler
+    from laplace_icla import LaplaceWrapper, LastLayerLaplace, cache_features
+
+    per_seed = {}
+    for seed in payload["seeds"]:
+        b1_ckpt = torch.load(out_root / f"b1_ce_s{seed}" / "best.pt", map_location=DEVICE,
+                             weights_only=False)
+        b1 = build(__import__("train").Config(**b1_ckpt["config"])); b1.load_state_dict(b1_ckpt["model"])
+        b1.eval()
+        a1_ckpt = torch.load(out_root / f"a1_fedl_s{seed}" / "best.pt", map_location=DEVICE,
+                             weights_only=False)
+        a1 = build(__import__("train").Config(**a1_ckpt["config"])); a1.load_state_dict(a1_ckpt["model"])
+        a1.eval()
+
+        loaders = D.cifar10_loaders(batch_size=256, num_workers=0, pin_memory=False)
+        phi_tr, y_tr = cache_features(b1, loaders["train"], DEVICE)
+        val_phi, val_y = cache_features(b1, loaders["val"], DEVICE)
+        a1_val = collect_predictive(a1, loaders["val"], DEVICE)
+        temp = TemperatureScaler().fit(_head(b1)(val_phi), val_y)
+        dscal = DirichletScaler().fit(
+            torch.tensor(np.log(a1_val["mean"].clip(1e-8, 1.0)), device=DEVICE),
+            torch.tensor(a1_val["labels"], device=DEVICE))
+        lap = LastLayerLaplace(curvature=payload["curvature"], n_samples=200).fit(
+            _head(b1), phi_tr, y_tr)
+        models = {
+            "B1_ce": b1, "B2_ce_temperature": CalibratedModel(b1, temp), "A1_fedl": a1,
+            "A2_fedl_dirichlet": CalibratedModel(a1, dscal),
+            "A3_laplace_icla": LaplaceWrapper(b1, lap),
+        }
+        per_seed[seed] = {"models": models, "loaders": loaders, "lambda": lap.lam,
+                          "temperature": temp.temperature, "dirichlet": dscal.describe()}
+        print(f"[figures] seed {seed} rebuilt: lambda={lap.lam:.4g} T={temp.temperature:.3f}",
+              flush=True)
+    return per_seed
+
+
+def collect_all(per_seed: dict) -> dict:
+    """Per-image predictive quantities on the test split and on both OOD controls."""
+    store: dict[str, dict] = {}
+    for seed, ctx in per_seed.items():
+        loaders = ctx["loaders"]
+        store[str(seed)] = {}
+        for name, model in ctx["models"].items():
+            sets = {"test": loaders["test"], "ood_near_svhn": None, "ood_far_tiny": None}
+            ood = D.ood_loaders(batch_size=256, num_workers=0)
+            sets["ood_near_svhn"] = ood.get("near_svhn")
+            sets["ood_far_tiny"] = ood.get("far_tiny_imagenet")
+            for split, loader in sets.items():
+                if loader is None:
+                    continue
+                coll = collect_predictive(model, loader, DEVICE)
+                for key in ("mean", "variance", "epistemic", "aleatoric", "labels"):
+                    if key in coll:
+                        store[str(seed)][f"{name}__{split}__{key}"] = coll[key]
+                store[str(seed)][f"{name}__{split}__total"] = (
+                    1.0 - (coll["mean"] ** 2).sum(1))
+        print(f"[figures] seed {seed} predictions collected", flush=True)
+    return store
+
+
+# ================================================================================================
+# Figures
+# ================================================================================================
+def _save(fig, name: str, suffix: str = "") -> Path:
+    if suffix:
+        stem, _, ext = name.partition(".")
+        name = f"{stem}_{suffix}.{ext}"
+    fig.savefig(ASSETS / name, bbox_inches="tight")
+    plt.close(fig)
+    print(f"[figures] wrote {ASSETS / name}", flush=True)
+    return ASSETS / name
+
+
+def fig_training_curves(out_root: Path, seeds: list[int]) -> Path:
+    """Loss and validation NLL versus epoch for both backbones, with the early-stop point marked."""
+    fig, axes = plt.subplots(1, 2, figsize=(9.2, 3.5))
+    for name, colour, style in (("b1_ce", CONFIG_COLOR["B1_ce"], "-"),
+                                ("a1_fedl", CONFIG_COLOR["A1_fedl"], "-")):
+        for i, seed in enumerate(seeds):
+            path = out_root / f"{name}_s{seed}" / "history.json"
+            if not path.exists():
+                continue
+            h = json.loads(path.read_text(encoding="utf-8"))["history"]
+            ep = [r["epoch"] for r in h]
+            label = name.replace("_", " ") if i == 0 else None
+            axes[0].plot(ep, [r["train_loss"] for r in h], style, color=colour, label=label)
+            vn = [(r["epoch"], r["val_nll"]) for r in h if "val_nll" in r]
+            if vn:
+                axes[1].plot([a for a, _ in vn], [b for _, b in vn], style, color=colour, label=label)
+                best = min(vn, key=lambda t: t[1])
+                axes[1].scatter(*best, zorder=5, color=colour, marker="*", s=70)
+    axes[0].set(xlabel="epoch", ylabel="training loss (batch mean)")
+    axes[0].set_title("Training objective")
+    axes[1].set(xlabel="epoch", ylabel="validation NLL")
+    axes[1].set_title("Model-selection signal (star = best, then early stop)")
+    axes[1].legend(frameon=False)
+    fig.suptitle("Figure 3. Optimisation and validation NLL for the two trained backbones", y=1.04)
+    return _save(fig, "figure_03_training_curves.png")
+
+
+def fig_reliability(store: dict, seed: str) -> Path:
+    """One reliability panel per configuration: the calibration story in a single image."""
+    labels = np.asarray(store[seed]["A1_fedl__test__labels"])
+    fig, axes = plt.subplots(1, 5, figsize=(15, 3.1), sharex=True, sharey=True)
+    for ax, name in zip(axes, MODEL_NAMES):
+        probs = store[seed][f"{name}__test__mean"]
+        bins = reliability_bins(probs, labels)
+        conf = [b["confidence"] for b in bins if b["count"] > 0]
+        acc = [b["accuracy"] for b in bins if b["count"] > 0]
+        cnt = [b["count"] for b in bins if b["count"] > 0]
+        width = [1.0 / 15 * 0.92] * len(conf)
+        ax.bar(conf, np.asarray(acc) - np.asarray(conf), width=width, bottom=conf,
+               color=CONFIG_COLOR[name], edgecolor="white", linewidth=0.5, label="|acc − conf|")
+        ax.plot([0, 1], [0, 1], "k--", lw=0.9, label="perfect")
+        ax.set_title(f"{CONFIG_LABEL[name]}\nECE = {expected_calibration_error(probs, labels):.4f}",
+                     fontsize=8.5)
+        ax.set_xlabel("confidence")
+        ax.set_xlim(0, 1); ax.set_ylim(0, 1)
+    axes[0].set_ylabel("accuracy")
+    axes[-1].legend(frameon=False, loc="upper left")
+    fig.suptitle("Figure 4. Reliability diagrams on the frozen test split "
+                 f"(bar height = miscalibration; seed {seed})", y=1.06)
+    return _save(fig, "figure_04_reliability.png", f"s{seed}")
+
+
+def fig_risk_coverage(store: dict, seed: str) -> Path:
+    fig, ax = plt.subplots(figsize=(5.6, 4.0))
+    labels = np.asarray(store[seed]["A1_fedl__test__labels"])
+    for name in MODEL_NAMES:
+        probs = store[seed][f"{name}__test__mean"]
+        cov, risk = risk_coverage_curve(probs, labels, n_points=200)
+        m = selective_prediction_metrics(probs, labels)
+        ax.plot(cov, risk, color=CONFIG_COLOR[name], lw=1.6,
+                label=f"{CONFIG_LABEL[name]}  AURC {m['aurc']:.4f}")
+    ax.set(xlabel="coverage (fraction kept)", ylabel="risk (error rate)")
+    ax.set_title(f"Figure 5. Selective prediction, seed {seed}\n"
+                 "(abstain on the most uncertain first)")
+    ax.legend(frameon=False, fontsize=7.5)
+    return _save(fig, "figure_05_risk_coverage.png", f"s{seed}")
+
+
+def fig_ood(store: dict, seeds: list[str]) -> Path:
+    """Near and far OOD AUROC per configuration, averaged over seeds with error bars."""
+    controls = [c for c in ("ood_near_svhn", "ood_far_tiny")
+                if f"A1_fedl__{c}__labels" in store[seeds[0]]]
+    score_names = ("epistemic", "total")
+    fig, axes = plt.subplots(1, len(controls), figsize=(5.0 * len(controls), 3.6), sharey=True)
+    axes = np.atleast_1d(axes)
+    for ax, control in zip(axes, controls):
+        width, xs = 0.36, np.arange(len(MODEL_NAMES))
+        for j, score in enumerate(score_names):
+            means, stds = [], []
+            for name in MODEL_NAMES:
+                vals = []
+                for seed in seeds:
+                    id_u = store[seed][f"{name}__test__{score}"]
+                    od_u = store[seed][f"{name}__{control}__{score}"]
+                    if len(id_u) == 0 or np.allclose(id_u, od_u) or (id_u.std() == 0 and
+                                                                     od_u.std() == 0):
+                        vals.append(0.5)
+                        continue
+                    vals.append(ood_detection_scores(id_u, od_u)["auroc"])
+                means.append(np.mean(vals)); stds.append(np.std(vals))
+            ax.bar(xs + (j - 0.5) * width, means, width * 0.9, yerr=stds, capsize=2,
+                   color=["#95a5a6", "#34495e"][j], label=f"{score} score")
+        ax.axhline(0.5, color="k", ls=":", lw=0.8)
+        ax.set_xticks(xs)
+        ax.set_xticklabels([n.split("_")[0] + n.split("_")[1][:3] for n in MODEL_NAMES], fontsize=8)
+        ax.set_title(f"{control.replace('ood_', '').replace('_', ' ')}")
+        ax.set_ylim(0.4, 1.02)
+    axes[0].set_ylabel("AUROC (OOD detected as more uncertain)")
+    axes[-1].legend(frameon=False)
+    fig.suptitle("Figure 6. Out-of-distribution detection, mean and spread over seeds", y=1.03)
+    return _save(fig, "figure_06_ood_detection.png")
+
+
+def fig_uncertainty_decomposition(store: dict, seed: str) -> Path:
+    """Do the epistemic and aleatoric terms actually mean anything? Compare correct vs wrong,
+    in-distribution vs out-of-distribution."""
+    labels = np.asarray(store[seed]["A1_fedl__test__labels"])
+    fig, axes = plt.subplots(1, 2, figsize=(9.6, 3.6))
+    for name in ("A1_fedl", "A3_laplace_icla"):
+        e = store[seed][f"{name}__test__epistemic"]
+        a = store[seed][f"{name}__test__aleatoric"]
+        pred = store[seed][f"{name}__test__mean"].argmax(1)
+        axes[0].hist(e[pred == labels], bins=40, alpha=0.55, density=True,
+                     color=CONFIG_COLOR[name], label=f"{name.split('_')[0]} correct")
+        axes[0].hist(e[pred != labels], bins=40, alpha=0.55, density=True, histtype="step",
+                     lw=1.6, color=CONFIG_COLOR[name], label=f"{name.split('_')[0]} wrong")
+        if f"{name}__ood_far_tiny__epistemic" in store[seed]:
+            od = store[seed][f"{name}__ood_far_tiny__epistemic"]
+            axes[1].hist(od, bins=40, alpha=0.5, density=True, color=CONFIG_COLOR[name],
+                         histtype="step", lw=1.8, label=f"{name.split('_')[0]} far-OOD")
+    axes[1].hist(store[seed]["A1_fedl__test__epistemic"], bins=40, alpha=0.45, density=True,
+                 color="#c0392b", histtype="step", lw=1.2, label="ID (reference)")
+    axes[0].set(xlabel="epistemic uncertainty $\\sum_k \\mathrm{Var}[\\pi_k]$", ylabel="density")
+    axes[0].set_title("Epistemic score: correct vs wrong predictions")
+    axes[1].set(xlabel="epistemic uncertainty", ylabel="density")
+    axes[1].set_title("In-distribution vs far out-of-distribution")
+    for ax in axes:
+        ax.legend(frameon=False, fontsize=7.5)
+    fig.suptitle(f"Figure 7. What the two Bayesian uncertainty terms separate (seed {seed})", y=1.04)
+    return _save(fig, "figure_07_uncertainty_decomposition.png", f"s{seed}")
+
+
+def fig_confusion(store: dict, seed: str, name: str = "A1_fedl") -> Path:
+    labels = np.asarray(store[seed][f"{name}__test__labels"])
+    pred = store[seed][f"{name}__test__mean"].argmax(1)
+    cm = np.zeros((10, 10), dtype=int)
+    for t, p in zip(labels, pred):
+        cm[int(t), int(p)] += 1
+    fig, ax = plt.subplots(figsize=(5.4, 4.6))
+    im = ax.imshow(cm / cm.sum(1, keepdims=True), cmap="Blues", vmin=0, vmax=1)
+    ax.set_xticks(range(10), CLASS_NAMES, rotation=90, fontsize=7.5)
+    ax.set_yticks(range(10), CLASS_NAMES, fontsize=7.5)
+    for i in range(10):
+        for j in range(10):
+            if cm[i, j] > 0:
+                ax.text(j, i, str(cm[i, j]), ha="center", va="center", fontsize=6.5,
+                        color="white" if cm[i, j] / max(cm[i].sum(), 1) > 0.5 else "black")
+    ax.set(xlabel="predicted", ylabel="true")
+    ax.set_title(f"Figure 8. Confusion matrix, {CONFIG_LABEL[name]} (seed {seed})")
+    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label="row-normalised count")
+    return _save(fig, "figure_08_confusion_matrix.png", f"s{seed}_{name.split('_')[0]}")
+
+
+def fig_evidence_anatomy(store: dict, seed: str, n_show: int = 6) -> Path:
+    """The figure that makes a Bayesian classifier legible: the predictive distribution, the
+    posterior spread and the uncertainty split for a handful of contrasting test images.
+
+    Only the images that ``export_webapp_data.py`` actually wrote to disk can be shown, so the
+    selection is restricted to the indices present in ``webapp/data/samples.json``. Picking an
+    arbitrary argmax over the whole test split would reference files that are not there.
+    """
+    meta_path = WEB_SAMPLES.parent / "samples.json"
+    if not meta_path.exists():
+        print("[figures] skipped figure 9: run src/export_webapp_data.py first", flush=True)
+        return None
+
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    available = {int(r["index"]): r["id"] for r in meta["images"]}
+
+    probs = store[seed]["A1_fedl__test__mean"]
+    var = store[seed]["A1_fedl__test__variance"]
+    epi = store[seed]["A1_fedl__test__epistemic"]
+    ale = store[seed]["A1_fedl__test__aleatoric"]
+    labels = np.asarray(store[seed]["A1_fedl__test__labels"])
+    pred = probs.argmax(1)
+    conf = probs.max(1)
+
+    pool = np.array(sorted(available), dtype=int)
+    if len(pool) < n_show:
+        print(f"[figures] skipped figure 9: only {len(pool)} exported samples", flush=True)
+        return None
+    correct_mask = pred[pool] == labels[pool]
+    pool_conf, pool_epi, pool_ale = conf[pool], epi[pool], ale[pool]
+
+    def pick(scores, best=max):
+        j = best(range(len(pool)), key=lambda i: scores[i])
+        return int(pool[j])
+
+    picks = []
+    for scores, best in (
+        (np.where(correct_mask, pool_conf, -1), max),        # confident and correct
+        (np.where(correct_mask, -pool_conf, -1), max),       # hesitant but correct
+        (np.where(~correct_mask, pool_conf, -1), max),       # confidently wrong
+        (np.where(~correct_mask, pool_epi, -1), max),        # wrong and maximally epistemic
+        (pool_epi, max),                                     # maximum epistemic overall
+        (pool_ale, max),                                     # maximum aleatoric overall
+    ):
+        idx = pick(scores, best)
+        if idx not in picks:
+            picks.append(idx)
+    picks = picks[:n_show]
+
+    fig = plt.figure(figsize=(12.6, 2.35 * max(len(picks), 1)))
+    gs = gridspec.GridSpec(len(picks), 3, width_ratios=[1.0, 2.3, 1.35],
+                           hspace=0.72, wspace=0.34)
+    for row, idx in enumerate(picks):
+        ax_img = fig.add_subplot(gs[row, 0])
+        ax_img.imshow(Image.open(WEB_SAMPLES / f"{available[idx]}.png"))
+        ax_img.set_axis_off()
+        truth, got = CLASS_NAMES[labels[idx]], CLASS_NAMES[pred[idx]]
+        verdict = "correct" if labels[idx] == pred[idx] else "WRONG"
+        ax_img.set_title(f"{truth} -> predicted {got}  ({verdict})", fontsize=8.5, pad=4)
+
+        ax_bar = fig.add_subplot(gs[row, 1])
+        ax_bar.barh(range(10), probs[idx], color=CONFIG_COLOR["A1_fedl"], alpha=0.8,
+                    label="predictive mean $\\mu_k$")
+        ax_bar.errorbar(probs[idx], range(10), xerr=np.sqrt(var[idx]), fmt="none",
+                        ecolor="#2c3e50", elinewidth=0.9, capsize=2,
+                        label="posterior std $\\sqrt{\\mathrm{Var}[\\pi_k]}$")
+        ax_bar.set_yticks(range(10), CLASS_NAMES, fontsize=7)
+        ax_bar.invert_yaxis(); ax_bar.set_xlim(0, 1)
+        ax_bar.set_xlabel("class probability" if row == len(picks) - 1 else "", fontsize=8)
+        if row == 0:
+            ax_bar.set_title("Dirichlet predictive mean with posterior spread", fontsize=8.5,
+                             pad=4)
+            ax_bar.legend(frameon=False, fontsize=6.5, loc="lower right")
+
+        ax_txt = fig.add_subplot(gs[row, 2]); ax_txt.set_axis_off()
+        ax_txt.text(0, 1.0,
+                    f"confidence   {conf[idx]:.3f}\n"
+                    f"epistemic    {epi[idx]:.4f}\n"
+                    f"aleatoric    {ale[idx]:.4f}\n"
+                    f"total        {epi[idx] + ale[idx]:.4f}\n"
+                    f"mean var/k   {var[idx].mean():.5f}",
+                    family="monospace", fontsize=8, va="top")
+        if row == 0:
+            ax_txt.set_title("Uncertainty decomposition", fontsize=8.5, pad=4)
+    fig.suptitle(f"Figure 9. Anatomy of {len(picks)} contrasting test predictions under F-EDL "
+                 f"(seed {seed})", y=1.005)
+    return _save(fig, "figure_09_evidence_anatomy.png", f"s{seed}")
+
+
+def fig_lambda_evidence(out_root: Path, seeds: list[int]) -> Path:
+    """The Bayesian evidence as a function of the prior precision, with the fitted optimum marked."""
+    from laplace_icla import LastLayerLaplace, cache_features
+    fig, ax = plt.subplots(figsize=(5.8, 3.8))
+    loaders = D.cifar10_loaders(batch_size=256, num_workers=0, pin_memory=False)
+    for i, seed in enumerate(seeds):
+        ck = torch.load(out_root / f"b1_ce_s{seed}" / "best.pt", map_location=DEVICE,
+                        weights_only=False)
+        b1 = build(__import__("train").Config(**ck["config"])); b1.load_state_dict(ck["model"])
+        b1.eval()
+        phi, y = cache_features(b1, loaders["train"], DEVICE)
+        lap = LastLayerLaplace(curvature="identity").fit(_head(b1), phi, y)
+        grid = np.logspace(np.log10(lap.lam / 50), np.log10(lap.lam * 50), 120)
+        ax.plot(grid, [lap.evidence(float(g)) for g in grid], color=CONFIG_COLOR["A3_laplace_icla"],
+                alpha=0.55 + 0.45 * i / max(len(seeds) - 1, 1), lw=1.4,
+                label=f"seed {seed}  $\\lambda^*$={lap.lam:.3g}")
+        ax.axvline(lap.lam, color=CONFIG_COLOR["A3_laplace_icla"], ls=":", lw=0.9)
+    ax.set_xscale("log")
+    ax.set(xlabel="prior precision  $\\lambda$", ylabel="Laplace log-evidence")
+    ax.set_title("Figure 10. Evidence maximisation selects the prior precision\n"
+                 "(posterior N(W_MAP, lambda^-1 I), identity curvature)")
+    ax.legend(frameon=False, fontsize=7.5)
+    return _save(fig, "figure_10_evidence_lambda.png")
+
+
+def fig_dataset_samples() -> Path:
+    """CIFAR-10 classes plus the two OOD controls, so the reader can see what is being rejected."""
+    from PIL import Image
+    loaders = D.cifar10_loaders(batch_size=256, num_workers=0, pin_memory=False)
+    test = loaders["test"].dataset
+    rng = np.random.default_rng(20261006)
+    fig, axes = plt.subplots(3, 10, figsize=(13, 4.3))
+    for k in range(10):
+        idxs = np.where(np.asarray(test.targets) == k)[0]
+        pick = rng.choice(idxs, 3, replace=False)
+        for row, i in enumerate(pick):
+            img, _ = test[int(i)]
+            axes[row, k].imshow(img.permute(1, 2, 0).numpy())
+            axes[row, k].set_axis_off()
+            if row == 2:
+                axes[row, k].set_title(CLASS_NAMES[k], fontsize=7.5)
+    fig.suptitle("Figure 2 (top). CIFAR-10 test images used by the classifier", y=0.99)
+    return _save(fig, "figure_02a_cifar_samples.png")
+
+
+def fig_ood_examples() -> Path:
+    from PIL import Image
+    ood = D.ood_loaders(batch_size=256, num_workers=0, limit=26)
+    fig, axes = plt.subplots(2, 10, figsize=(13, 2.9))
+    titles = {"near_svhn": "near-OOD: SVHN", "far_tiny_imagenet": "far-OOD: Tiny-ImageNet-200"}
+    for row, (key, loader) in enumerate(ood.items()):
+        mean = torch.tensor(D.CIFAR10_MEAN).view(3, 1, 1)
+        std = torch.tensor(D.CIFAR10_STD).view(3, 1, 1)
+        for col, (x, _) in enumerate(loader):
+            if col >= 10:
+                break
+            axes[row, col].imshow(((x[col] * std + mean).permute(1, 2, 0).clamp(0, 1)).numpy())
+            axes[row, col].set_axis_off()
+        axes[row, 0].set_ylabel(titles.get(key, key), fontsize=8)
+    fig.suptitle("Figure 2 (bottom). The two out-of-distribution control sets", y=1.0)
+    return _save(fig, "figure_02b_ood_examples.png")
+
+
+# ================================================================================================
+WEB_SAMPLES = ROOT / "webapp" / "data" / "samples"
+
+
+def load_store_from_cache(payload: dict) -> dict:
+    """Rebuild the per-seed prediction store from the cache written by an earlier run."""
+    cache = ANALYSIS / "test_predictions.npz"
+    npz = np.load(cache)
+    store: dict[str, dict] = {}
+    for key in npz.files:
+        seed, name = key.split("::", 1)
+        store.setdefault(seed, {})[name] = npz[key]
+    wanted = [str(s) for s in payload["seeds"]]
+    if not all(s in store for s in wanted):
+        raise FileNotFoundError(f"cache {cache} is missing seeds {wanted}")
+    print(f"[figures] reusing cached predictions from {cache}", flush=True)
+    return store
+
+
+def main(results_glob: str, reuse: bool = False) -> int:
+    files = sorted(glob.glob(results_glob))
+    if not files:
+        print(f"[figures] no results matching {results_glob!r}", file=sys.stderr)
+        return 1
+    path = Path(max(files, key=os.path.getmtime))
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    out_root = Path(payload["out_dir"])
+    ANALYSIS.mkdir(exist_ok=True); ASSETS.mkdir(exist_ok=True)
+
+    seeds = [str(s) for s in payload["seeds"]]
+    cache = ANALYSIS / "test_predictions.npz"
+    if reuse and cache.exists():
+        store = load_store_from_cache(payload)
+    else:
+        per_seed = load_models(payload, out_root)
+        store = collect_all(per_seed)
+        flat = {f"{seed}::{k}": v for seed, d in store.items() for k, v in d.items()}
+        np.savez_compressed(cache, **flat)
+        print(f"[figures] wrote {cache}", flush=True)
+
+    made = [fig_dataset_samples(), fig_ood_examples(), fig_training_curves(out_root, payload["seeds"])]
+    for seed in seeds:
+        made += [fig_reliability(store, seed), fig_risk_coverage(store, seed),
+                 fig_uncertainty_decomposition(store, seed), fig_confusion(store, seed)]
+    made += [fig_ood(store, seeds), fig_evidence_anatomy(store, seeds[0]),
+             fig_lambda_evidence(out_root, payload["seeds"])]
+    made = [m for m in made if m is not None]
+
+    summary = {"results_file": str(path), "seeds": payload["seeds"],
+               "figures": [str(p.name) for p in made],
+               "aggregate": payload.get("aggregate", {})}
+    (ANALYSIS / "summary.json").write_text(json.dumps(summary, indent=1), encoding="utf-8")
+    print(f"[figures] {len(made)} figures written to {ASSETS}", flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--results", default="runs/full_*/matrix_results.json")
+    p.add_argument("--reuse", action="store_true",
+                   help="reuse analysis/test_predictions.npz instead of re-running inference")
+    a = p.parse_args()
+    raise SystemExit(main(a.results, reuse=a.reuse))

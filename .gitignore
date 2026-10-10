@@ -1,0 +1,53 @@
+# Datasets are re-downloadable with src/prepare_data.py and are NOT redistributed here.
+# CIFAR-10's official page states no licence, so the images stay out of the public repository.
+# The contents (not the directory) are excluded so that splits.json can be re-included below --
+# git cannot un-ignore a file whose parent directory is itself ignored.
+/data/*
+!/data/splits.json
+
+# Model checkpoints (~1.8 GB) and the derived evaluation cache are regenerable, so they stay out.
+/runs/
+*.pt
+!**/.gitkeep
+analysis/test_predictions.npz
+
+# The published site's binaries. `main` carries source only; the `gh-pages` branch carries the two
+# ONNX graphs (114 MB), the onnxruntime-web wasm (33 MB) and the 10,000 test thumbnails (23 MB).
+# src/package_pages.py assembles that branch from a working copy of webapp/, so nothing here needs
+# to be fetched by hand. Largest single file 57.8 MB, inside GitHub's 100 MB per-file cap.
+*.onnx
+/webapp/ort/
+/webapp/data/test/
+
+# Raw web pages fetched by the literature-search subagents (third-party content, ~35 MB).
+/research_records/retrieval_cache/
+
+# Reference source files consulted under decision D-1(b) to recover the mathematics only.
+# The consulted repository declares no licence, so these are audit evidence, not redistribution.
+/research_records/reference_consulted/
+
+# Third-party paper PDFs and the course materials supplied by the unit are not part of the
+# source code being published. Assignment 1's repository made the same choice.
+*.pdf
+*.pptx
+*.docx
+
+# The bilingual dialogue archive is evidence for the report appendix, not for the public
+# repository. Assignment 1 kept it local for the same reason.
+research_records/conversation_log.md
+
+# Python and tooling noise.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+*.log
+.DS_Store
+Thumbs.db
+
+# Local editor state.
+.vscode/
+.idea/
+
+# Build output for the gh-pages branch; the branch itself is committed separately.
+/pages_build/
