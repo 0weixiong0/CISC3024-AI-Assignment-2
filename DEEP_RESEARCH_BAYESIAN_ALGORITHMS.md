@@ -242,8 +242,9 @@ verification; no dataset, weight or package was installed.
 
 ## Bibliography
 
-[1] Yoon, T., Kim, H., et al. — *Uncertainty Estimation by Flexible Evidential Deep Learning* (arXiv
-Comments: NeurIPS 2025) — https://arxiv.org/abs/2510.18322 — Accessed 2026-10-06 — Tier: 1
+[1] Yoon, T., & Kim, H. — *Uncertainty Estimation by Flexible Evidential Deep Learning* (arXiv
+Comments: NeurIPS 2025) — https://arxiv.org/abs/2510.18322 — Accessed 2026-10-06, author list
+re-verified 2026-10-11 as exactly these two authors — Tier: 1
 [2] TaeseongYoon — F-EDL official repository (no license) — https://github.com/TaeseongYoon/F-EDL —
 Accessed 2026-10-06 — Tier: 1
 [3] Zhdanov, M., et al. — *Identity Curvature Laplace Approximation for Improved Out-of-Distribution
@@ -287,10 +288,12 @@ Accessed 2026-10-06 — Tier: 1 [foundational]
 [17] Kristiadi, A., Hein, M., Bauerschmidt, S. — *Learnable Uncertainty under Laplace
 Approximations* — AISTATS 2021 — https://proceedings.mlr.press/v161/kristiadi21a/kristiadi21a.pdf —
 Accessed 2026-10-06 — Tier: 1 [foundational]
-[18] Müller, A., et al. — *A Large-Scale Evaluation of Bayesian Deep Learning under Shift* — NeurIPS
-2023 Datasets & Benchmarks —
-https://proceedings.neurips.cc/paper_files/paper/2023/file/5d97b7e62022c859347397f6c1e8d0f9-Paper-Conference.pdf
-— Accessed 2026-10-06 — Tier: 1 [foundational]
+[18] Seligmann, F., Becker, P., Volpp, M., & Neumann, G. — *Beyond Deep Ensembles: A Large-Scale
+Evaluation of Bayesian Deep Learning under Distribution Shift* — NeurIPS 2023 —
+https://arxiv.org/abs/2306.12306 — Accessed 2026-10-06; **attribution corrected 2026-10-11**: this
+entry previously read "Müller, A., et al. — A Large-Scale Evaluation of Bayesian Deep Learning under
+Shift", which is the wrong first author. The NeurIPS proceedings PDF filename keeps the short title —
+Tier: 1 [foundational]
 [19] IEEE TPAMI 48(3), 2026 — *A Comprehensive Survey on Evidential Deep Learning for Uncertainty
 Quantification* — https://www.computer.org/csdl/journal/tp/2026/03/11217233/2b4UDI712yk — Accessed
 2026-10-06 — Tier: 1 (paywalled; abstract-level only)

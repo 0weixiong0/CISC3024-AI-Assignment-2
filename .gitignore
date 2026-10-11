@@ -22,8 +22,8 @@ analysis/test_predictions.npz
 # Raw web pages fetched by the literature-search subagents (third-party content, ~35 MB).
 /research_records/retrieval_cache/
 
-# Reference source files consulted under decision D-1(b) to recover the mathematics only.
-# The consulted repository declares no licence, so these are audit evidence, not redistribution.
+# Source files of the reference implementations, read only to recover the mathematics.  The
+# consulted repository declares no licence, so these stay as audit evidence and are not published.
 /research_records/reference_consulted/
 
 # Third-party paper PDFs and the course materials supplied by the unit are not part of the

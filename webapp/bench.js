@@ -27,6 +27,8 @@
      same session throw "Session already started". A visitor dragging the brush produces runs far
      faster than the network can answer them, so requests are chained rather than raced. */
   var CHAIN = Promise.resolve();
+  /* What the evidential card says while its network is still on the wire. */
+  var EVI_NOTE = "The evidential network is still downloading.";
 
   /* ---------------------------------------------------------------- math */
 
@@ -139,7 +141,9 @@
     return new ort.Tensor("float32", out, [1, 3, 32, 32]);
   }
 
-  function reduceAll(logits, features, alpha, p, tau) {
+  /* ``evi`` is null while the evidential network is still downloading: the three reductions that
+     come off the baseline (B1, B2 and the Laplace A3) are already complete without it. */
+  function reduceAll(logits, features, evi) {
     var K = logits.length, i, j;
     var out = {};
 
@@ -154,18 +158,24 @@
       return summarise(m, zeros(K), 0, m);
     })();
 
-    var fd = fdMoments(alpha, p, tau);
-    out.A1_fedl = summarise(fd.mean, fd.variance, fd.epistemic, fd.mean);
-    out.A1_internals = fd;
+    if (evi) {
+      var fd = fdMoments(evi.alpha, evi.p, evi.tau);
+      out.A1_fedl = summarise(fd.mean, fd.variance, fd.epistemic, fd.mean);
+      out.A1_internals = fd;
 
-    out.A2_fedl_dirichlet = (function () {
-      var t = INSTR.dirichlet_scaling.t, b = INSTR.dirichlet_scaling.b;
-      var z = fd.mean.map(function (mu, k) {
-        return t[k] * Math.log(Math.max(mu, 1e-8)) + b[k];
-      });
-      var m = softmax(z);
-      return summarise(m, zeros(K), 0, m);
-    })();
+      out.A2_fedl_dirichlet = (function () {
+        var t = INSTR.dirichlet_scaling.t, b = INSTR.dirichlet_scaling.b;
+        var z = fd.mean.map(function (mu, k) {
+          return t[k] * Math.log(Math.max(mu, 1e-8)) + b[k];
+        });
+        var m = softmax(z);
+        return summarise(m, zeros(K), 0, m);
+      })();
+    } else {
+      out.A1_fedl = null;
+      out.A1_internals = null;
+      out.A2_fedl_dirichlet = null;
+    }
 
     out.A3_laplace_icla = (function () {
       var W = INSTR.laplace.W_map, bmap = INSTR.laplace.b_map, sigma = INSTR.laplace.posterior_std;
@@ -221,25 +231,27 @@
 
   function infer() {
     var feed = { image: tensorFromPlate() };
-    var base, evi;
+    var base;
     return SESS.baseline.run(feed).then(function (r) {
       base = r;
-      return SESS.evidential.run(feed);
+      return SESS.evidential ? SESS.evidential.run(feed) : null;
     }).then(function (r) {
-      evi = r;
       var logits = Array.prototype.slice.call(out(base, "logits").data);
       var features = Array.prototype.slice.call(out(base, "features").data);
-      var alpha = Array.prototype.slice.call(out(evi, "alpha").data);
-      var p = Array.prototype.slice.call(out(evi, "p").data);
-      var tau = out(evi, "tau").data[0];
-      paint(reduceAll(logits, features, alpha, p, tau));
+      var evi = null;
+      if (r) {
+        evi = { alpha: Array.prototype.slice.call(out(r, "alpha").data),
+                p: Array.prototype.slice.call(out(r, "p").data),
+                tau: out(r, "tau").data[0] };
+      }
+      paint(reduceAll(logits, features, evi));
     });
   }
 
   /* ---------------------------------------------------------------- painting */
 
   var CLASSES = [];
-  function bars(svg, probs, colour, marks) {
+  function bars(svg, probs, colour, marks, waiting) {
     while (svg.firstChild) svg.removeChild(svg.firstChild);
     var rowH = 14, x0 = 74, w = 200, head = 22;
     text(svg, 0, 9, "class", "head");
@@ -250,7 +262,8 @@
       text(svg, 0, y + 3, name, "rowlabel");
       line(svg, x0, y, x0 + w, y, "grid");
       line(svg, x0, y, x0 + Math.max(0.6, probs[i] * w), y, "series", colour, 1.6);
-      text(svg, x0 + w + 6, y + 3, probs[i].toFixed(4), "value");
+      /* A waiting plate must not read as ten measurements of zero. */
+      text(svg, x0 + w + 6, y + 3, waiting ? "\u2014" : probs[i].toFixed(4), "value");
       if (marks && marks[i] !== undefined) {
         text(svg, x0 + w + 52, y + 3, marks[i], "value");
       }
@@ -297,6 +310,21 @@
       ["Aleatoric", b1.aleatoric.toFixed(5)]
     ]);
 
+    var verdict = document.getElementById("verdict-a1");
+    var instA1 = document.getElementById("inst-a1");
+    if (!a1) {
+      bars(document.getElementById("bars-a1"), zeros(CLASSES.length), HUE[486], null, true);
+      readout(document.getElementById("read-a1"), [
+        ["Predicted", "awaiting the evidential network"],
+        ["Probability", "—"], ["Epistemic", "—"], ["Aleatoric", "—"],
+        ["Total evidence", "—"], ["Tau", "—"]
+      ]);
+      instA1.setAttribute("data-state", "waiting");
+      verdict.className = "instrument__verdict";
+      verdict.textContent = EVI_NOTE;
+      table(all);
+      return;
+    }
     bars(document.getElementById("bars-a1"), a1.mean, HUE[486],
       fd.alpha.map(function (v) { return Math.max(v - 1, 0).toFixed(1); }));
     readout(document.getElementById("read-a1"), [
@@ -310,7 +338,6 @@
 
     var limit = INSTR.abstain.A1_fedl.total_uncertainty;
     var declining = a1.total > limit;
-    var verdict = document.getElementById("verdict-a1");
     verdict.textContent = declining
       ? "Declining to answer: total uncertainty " + a1.total.toFixed(4) + " is past the line at " +
         limit.toFixed(4) + ", where the test risk-coverage curve passes 5 % risk."
@@ -346,6 +373,11 @@
       "<th scope='col'>Declines</th></tr></thead><tbody>";
     ORDER.forEach(function (id) {
       var r = all[id];
+      if (!r) {
+        html += "<tr class='pending'><th scope='row' class='row-head'>" + SHORT[id] +
+          "</th><td class='num' colspan='5'>" + EVI_NOTE + "</td></tr>";
+        return;
+      }
       var limit = INSTR.abstain[id] ? INSTR.abstain[id].total_uncertainty : null;
       var declines = limit !== null && r.total > limit;
       html += "<tr><th scope='row' class='row-head'>" + SHORT[id] + "</th>" +
@@ -396,12 +428,31 @@
       });
   }
 
-  function fetchModel(path) {
+  function fetchModel(path, onProgress) {
     return fetch(path).then(function (r) {
       if (!r.ok) throw new Error(path + " returned " + r.status);
-      return r.arrayBuffer();
+      var total = parseInt(r.headers.get("content-length") || "0", 10);
+      if (!r.body || !total) return r.arrayBuffer();
+      var reader = r.body.getReader(), chunks = [], got = 0, shown = -1;
+      function step() {
+        return reader.read().then(function (part) {
+          if (part.done) {
+            var buf = new Uint8Array(got), at = 0;
+            chunks.forEach(function (c) { buf.set(c, at); at += c.length; });
+            return buf.buffer;
+          }
+          chunks.push(part.value);
+          got += part.value.length;
+          var percent = Math.floor(got / total * 100);
+          if (percent !== shown) { shown = percent; onProgress(got, total, percent); }
+          return step();
+        });
+      }
+      return step();
     });
   }
+
+  function megabytes(bytes) { return (bytes / 1048576).toFixed(1); }
 
   /* ?specimen=NNNNN loads one test image into the plate once the instruments are ready, so a
      particular case can be linked from the report instead of described in prose. */
@@ -431,6 +482,26 @@
     probe.src = "data/test/" + String(i).padStart(5, "0") + ".png";
   }
 
+  /* The evidential network is 58 MB on its own, so it is fetched after the baseline is already
+     answering: B1, B2 and the Laplace A3 need only the baseline, and the two that need this one
+     say what they are waiting for instead of holding up the whole plate. */
+  function loadEvidential() {
+    return fetchModel("model/evidential.onnx", function (got, total, percent) {
+      EVI_NOTE = "Evidential network " + megabytes(got) + " of " + megabytes(total) +
+        " MB (" + percent + " %).";
+      setStatus("loading", EVI_NOTE + " B1, B2 and A3 above are already complete.");
+    }).then(makeSession).then(function (session) {
+      SESS.evidential = session;
+      EVI_NOTE = "Ready.";
+      setStatus("ready", "Ready. Both networks are in, so all five configurations answer this plate.");
+      run();
+    }).catch(function (err) {
+      EVI_NOTE = "The evidential network did not load: " + (err.message || err) + ".";
+      setStatus("error", EVI_NOTE + " Check that <code>model/evidential.onnx</code> exists — it is " +
+        "written by <code>python src/export_onnx.py</code>.");
+    });
+  }
+
   function boot() {
     if (location.protocol === "file:") {
       setStatus("error", "Opened from disk, so the browser will not let this page read the two " +
@@ -447,22 +518,25 @@
       document.getElementById("field-decline").textContent =
         "total uncertainty " + INSTR.abstain.A1_fedl.total_uncertainty.toFixed(4) +
         " (5 % risk line)";
-      return Promise.all([fetchModel("model/baseline.onnx"), fetchModel("model/evidential.onnx")]);
-    }).then(function (bufs) {
-      setStatus("loading", "Networks downloaded; compiling for this machine. The first inference " +
-        "is slower than the rest.");
-      return Promise.all([makeSession(bufs[0]), makeSession(bufs[1])]);
-    }).then(function (sessions) {
-      SESS.baseline = sessions[0];
-      SESS.evidential = sessions[1];
+      return fetchModel("model/baseline.onnx", function (got, total, percent) {
+        setStatus("loading", "Baseline network " + megabytes(got) + " of " + megabytes(total) +
+          " MB (" + percent + " %). The evidential network follows once this one is running.");
+      });
+    }).then(function (buf) {
+      setStatus("loading", "Baseline downloaded; compiling it for this machine. The first " +
+        "inference is slower than the rest.");
+      return makeSession(buf);
+    }).then(function (session) {
+      SESS.baseline = session;
       buildWall();
-      runtimeField.textContent = sessions[0].inputNames ? "onnxruntime-web, " +
-        (SESS.webgpu ? "WebGPU" : "WASM (CPU)") : "onnxruntime-web";
+      runtimeField.textContent = "onnxruntime-web, " + (SESS.webgpu ? "WebGPU" : "WASM (CPU)");
       var want = deepLinkedSpecimen();
       setStatus("ready", want === null
-        ? "Ready. Draw on the plate, or pick a specimen below."
-        : "Ready. Loading test image " + want + ".");
+        ? "Baseline is in, so B1, B2 and A3 already answer this plate. The evidential network is " +
+          "downloading now."
+        : "Baseline is in, reading test image " + want + ". The evidential network is downloading.");
       if (want === null) run(); else loadSpecimenByIndex(want);
+      loadEvidential();
     }).catch(function (err) {
       setStatus("error", "The instruments did not load: " + (err.message || err) + ". Check that " +
         "<code>model/baseline.onnx</code> and <code>model/evidential.onnx</code> exist — they are " +

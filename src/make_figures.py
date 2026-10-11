@@ -172,7 +172,7 @@ def fig_training_curves(out_root: Path, seeds: list[int]) -> Path:
     axes[1].set(xlabel="epoch", ylabel="validation NLL")
     axes[1].set_title("Model-selection signal (star = best, then early stop)")
     axes[1].legend(frameon=False)
-    fig.suptitle("Figure 3. Optimisation and validation NLL for the two trained backbones", y=1.04)
+    fig.suptitle("Optimisation and validation NLL for the two trained backbones", y=1.04)
     return _save(fig, "figure_03_training_curves.png")
 
 
@@ -196,7 +196,7 @@ def fig_reliability(store: dict, seed: str) -> Path:
         ax.set_xlim(0, 1); ax.set_ylim(0, 1)
     axes[0].set_ylabel("accuracy")
     axes[-1].legend(frameon=False, loc="upper left")
-    fig.suptitle("Figure 4. Reliability diagrams on the frozen test split "
+    fig.suptitle("Reliability diagrams on the frozen test split "
                  f"(bar height = miscalibration; seed {seed})", y=1.06)
     return _save(fig, "figure_04_reliability.png", f"s{seed}")
 
@@ -210,8 +210,11 @@ def fig_risk_coverage(store: dict, seed: str) -> Path:
         m = selective_prediction_metrics(probs, labels)
         ax.plot(cov, risk, color=CONFIG_COLOR[name], lw=1.6,
                 label=f"{CONFIG_LABEL[name]}  AURC {m['aurc']:.4f}")
+    ax.axhline(0.05, color="#111a24", ls="--", lw=0.9)
+    ax.text(0.015, 0.0515, "5 % risk: where the decline thresholds are cut", fontsize=6.6,
+            color="#111a24")
     ax.set(xlabel="coverage (fraction kept)", ylabel="risk (error rate)")
-    ax.set_title(f"Figure 5. Selective prediction, seed {seed}\n"
+    ax.set_title(f"Selective prediction, seed {seed}\n"
                  "(abstain on the most uncertain first)")
     ax.legend(frameon=False, fontsize=7.5)
     return _save(fig, "figure_05_risk_coverage.png", f"s{seed}")
@@ -248,36 +251,56 @@ def fig_ood(store: dict, seeds: list[str]) -> Path:
         ax.set_ylim(0.4, 1.02)
     axes[0].set_ylabel("AUROC (OOD detected as more uncertain)")
     axes[-1].legend(frameon=False)
-    fig.suptitle("Figure 6. Out-of-distribution detection, mean and spread over seeds", y=1.03)
+    fig.suptitle("Out-of-distribution detection, mean and spread over seeds", y=1.03)
     return _save(fig, "figure_06_ood_detection.png")
 
 
+def _log_density(axis, values: np.ndarray, bins: int, **kwargs) -> None:
+    """Step plot of a density measured per decade, on bins that are themselves logarithmic.
+
+    The epistemic scores span thirteen orders of magnitude, so a linear histogram is one spike and
+    the separation the report claims is invisible. Bins geometric in x and a density per log10 unit
+    keep the areas comparable across groups of very different size.
+    """
+    values = np.asarray(values, dtype=np.float64)
+    low = max(float(values.min()), 1e-16)
+    high = float(values.max()) * 1.05
+    edges = np.geomspace(low, high, bins + 1)
+    counts, edges = np.histogram(values, bins=edges)
+    density = counts / max(values.size, 1) / np.diff(np.log10(edges))
+    axis.step(np.repeat(edges, 2)[1:-1], np.repeat(density, 2), where="mid", **kwargs)
+
+
 def fig_uncertainty_decomposition(store: dict, seed: str) -> Path:
-    """Do the epistemic and aleatoric terms actually mean anything? Compare correct vs wrong,
-    in-distribution vs out-of-distribution."""
+    """Does the epistemic term mean anything? Compare correct vs wrong, and in-distribution vs
+    out-of-distribution, on the axis where the two Bayesian models actually differ."""
     labels = np.asarray(store[seed]["A1_fedl__test__labels"])
     fig, axes = plt.subplots(1, 2, figsize=(9.6, 3.6))
     for name in ("A1_fedl", "A3_laplace_icla"):
-        e = store[seed][f"{name}__test__epistemic"]
-        a = store[seed][f"{name}__test__aleatoric"]
+        e = np.asarray(store[seed][f"{name}__test__epistemic"], dtype=np.float64)
         pred = store[seed][f"{name}__test__mean"].argmax(1)
-        axes[0].hist(e[pred == labels], bins=40, alpha=0.55, density=True,
-                     color=CONFIG_COLOR[name], label=f"{name.split('_')[0]} correct")
-        axes[0].hist(e[pred != labels], bins=40, alpha=0.55, density=True, histtype="step",
-                     lw=1.6, color=CONFIG_COLOR[name], label=f"{name.split('_')[0]} wrong")
+        _log_density(axes[0], e[pred == labels], 46, color=CONFIG_COLOR[name], lw=1.5,
+                     label=f"{name.split('_')[0]} correct")
+        _log_density(axes[0], e[pred != labels], 46, color=CONFIG_COLOR[name], lw=1.5,
+                     ls="--", label=f"{name.split('_')[0]} wrong")
         if f"{name}__ood_far_tiny__epistemic" in store[seed]:
-            od = store[seed][f"{name}__ood_far_tiny__epistemic"]
-            axes[1].hist(od, bins=40, alpha=0.5, density=True, color=CONFIG_COLOR[name],
-                         histtype="step", lw=1.8, label=f"{name.split('_')[0]} far-OOD")
-    axes[1].hist(store[seed]["A1_fedl__test__epistemic"], bins=40, alpha=0.45, density=True,
-                 color="#c0392b", histtype="step", lw=1.2, label="ID (reference)")
-    axes[0].set(xlabel="epistemic uncertainty $\\sum_k \\mathrm{Var}[\\pi_k]$", ylabel="density")
+            od = np.asarray(store[seed][f"{name}__ood_far_tiny__epistemic"], dtype=np.float64)
+            _log_density(axes[1], od, 46, color=CONFIG_COLOR[name], lw=1.6,
+                         label=f"{name.split('_')[0]} far-OOD")
+    _log_density(axes[1], np.asarray(store[seed]["A1_fedl__test__epistemic"], dtype=np.float64),
+                 46, color="#c0392b", lw=1.2, ls=":", label="ID (reference)")
+    for axis in axes:
+        axis.set_xscale("log")
+        axis.set_ylim(bottom=0)
+        axis.tick_params(labelsize=8)
+    axes[0].set(xlabel="epistemic uncertainty $\\sum_k \\mathrm{Var}[\\pi_k]$",
+                ylabel="fraction per decade")
     axes[0].set_title("Epistemic score: correct vs wrong predictions")
-    axes[1].set(xlabel="epistemic uncertainty", ylabel="density")
+    axes[1].set(xlabel="epistemic uncertainty", ylabel="fraction per decade")
     axes[1].set_title("In-distribution vs far out-of-distribution")
     for ax in axes:
         ax.legend(frameon=False, fontsize=7.5)
-    fig.suptitle(f"Figure 7. What the two Bayesian uncertainty terms separate (seed {seed})", y=1.04)
+    fig.suptitle(f"What the epistemic term separates (seed {seed})", y=1.04)
     return _save(fig, "figure_07_uncertainty_decomposition.png", f"s{seed}")
 
 
@@ -297,7 +320,7 @@ def fig_confusion(store: dict, seed: str, name: str = "A1_fedl") -> Path:
                 ax.text(j, i, str(cm[i, j]), ha="center", va="center", fontsize=6.5,
                         color="white" if cm[i, j] / max(cm[i].sum(), 1) > 0.5 else "black")
     ax.set(xlabel="predicted", ylabel="true")
-    ax.set_title(f"Figure 8. Confusion matrix, {CONFIG_LABEL[name]} (seed {seed})")
+    ax.set_title(f"Confusion matrix, {CONFIG_LABEL[name]} (seed {seed})")
     fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label="row-normalised count")
     return _save(fig, "figure_08_confusion_matrix.png", f"s{seed}_{name.split('_')[0]}")
 
@@ -333,21 +356,24 @@ def fig_evidence_anatomy(store: dict, seed: str, n_show: int = 6) -> Path:
     correct_mask = pred[pool] == labels[pool]
     pool_conf, pool_epi, pool_ale = conf[pool], epi[pool], ale[pool]
 
-    def pick(scores, best=max):
-        j = best(range(len(pool)), key=lambda i: scores[i])
-        return int(pool[j])
+    def take(scores, used) -> int | None:
+        """The best-scoring image in this stratum that no earlier stratum has already claimed."""
+        for j in np.argsort(-scores, kind="mergesort"):
+            if int(pool[j]) not in used:
+                return int(pool[j])
+        return None
 
     picks = []
-    for scores, best in (
-        (np.where(correct_mask, pool_conf, -1), max),        # confident and correct
-        (np.where(correct_mask, -pool_conf, -1), max),       # hesitant but correct
-        (np.where(~correct_mask, pool_conf, -1), max),       # confidently wrong
-        (np.where(~correct_mask, pool_epi, -1), max),        # wrong and maximally epistemic
-        (pool_epi, max),                                     # maximum epistemic overall
-        (pool_ale, max),                                     # maximum aleatoric overall
+    for scores in (
+        np.where(correct_mask, pool_conf, -np.inf),          # confident and correct
+        np.where(correct_mask, -pool_conf, -np.inf),         # hesitant but correct
+        np.where(~correct_mask, pool_conf, -np.inf),         # confidently wrong
+        np.where(~correct_mask, pool_epi, -np.inf),          # wrong and maximally epistemic
+        pool_epi,                                            # maximum epistemic overall
+        pool_ale,                                            # maximum aleatoric overall
     ):
-        idx = pick(scores, best)
-        if idx not in picks:
+        idx = take(scores, set(picks))
+        if idx is not None:
             picks.append(idx)
     picks = picks[:n_show]
 
@@ -386,7 +412,7 @@ def fig_evidence_anatomy(store: dict, seed: str, n_show: int = 6) -> Path:
                     family="monospace", fontsize=8, va="top")
         if row == 0:
             ax_txt.set_title("Uncertainty decomposition", fontsize=8.5, pad=4)
-    fig.suptitle(f"Figure 9. Anatomy of {len(picks)} contrasting test predictions under F-EDL "
+    fig.suptitle(f"Anatomy of {len(picks)} contrasting test predictions under F-EDL "
                  f"(seed {seed})", y=1.005)
     return _save(fig, "figure_09_evidence_anatomy.png", f"s{seed}")
 
@@ -410,47 +436,72 @@ def fig_lambda_evidence(out_root: Path, seeds: list[int]) -> Path:
         ax.axvline(lap.lam, color=CONFIG_COLOR["A3_laplace_icla"], ls=":", lw=0.9)
     ax.set_xscale("log")
     ax.set(xlabel="prior precision  $\\lambda$", ylabel="Laplace log-evidence")
-    ax.set_title("Figure 10. Evidence maximisation selects the prior precision\n"
+    ax.set_title("Evidence maximisation selects the prior precision\n"
                  "(posterior N(W_MAP, lambda^-1 I), identity curvature)")
     ax.legend(frameon=False, fontsize=7.5)
     return _save(fig, "figure_10_evidence_lambda.png")
 
 
 def fig_dataset_samples() -> Path:
-    """CIFAR-10 classes plus the two OOD controls, so the reader can see what is being rejected."""
-    from PIL import Image
+    """CIFAR-10 test images, three per class, shown as pixels rather than as normalised tensors."""
     loaders = D.cifar10_loaders(batch_size=256, num_workers=0, pin_memory=False)
     test = loaders["test"].dataset
     rng = np.random.default_rng(20261006)
+    mean = torch.tensor(D.CIFAR10_MEAN).view(3, 1, 1)
+    std = torch.tensor(D.CIFAR10_STD).view(3, 1, 1)
     fig, axes = plt.subplots(3, 10, figsize=(13, 4.3))
     for k in range(10):
         idxs = np.where(np.asarray(test.targets) == k)[0]
         pick = rng.choice(idxs, 3, replace=False)
         for row, i in enumerate(pick):
-            img, _ = test[int(i)]
-            axes[row, k].imshow(img.permute(1, 2, 0).numpy())
+            tensor, _ = test[int(i)]
+            # The dataset hands out normalised tensors; displaying them directly clips the range and
+            # renders the images with blown-out contrast.
+            pixel = ((tensor * std + mean).clamp(0, 1)).permute(1, 2, 0).numpy()
+            axes[row, k].imshow(pixel)
             axes[row, k].set_axis_off()
-            if row == 2:
-                axes[row, k].set_title(CLASS_NAMES[k], fontsize=7.5)
-    fig.suptitle("Figure 2 (top). CIFAR-10 test images used by the classifier", y=0.99)
+    for k, name in enumerate(CLASS_NAMES):
+        position = axes[2, k].get_position()
+        fig.text((position.x0 + position.x1) / 2, position.y0 - 0.035, name, ha="center", fontsize=8)
+    fig.suptitle("CIFAR-10 test images used by the classifier, three per class", y=0.99)
     return _save(fig, "figure_02a_cifar_samples.png")
 
 
 def fig_ood_examples() -> Path:
-    from PIL import Image
-    ood = D.ood_loaders(batch_size=256, num_workers=0, limit=26)
-    fig, axes = plt.subplots(2, 10, figsize=(13, 2.9))
+    """Ten images from each out-of-distribution control set, at the scale the model sees them."""
+    columns = 10
+    sets: dict[str, torch.Tensor] = {}
+    for key, loader in D.ood_loaders(batch_size=columns, num_workers=0, limit=columns).items():
+        for images, _ in loader:
+            sets[key] = images[:columns]
+            break
+    missing = [k for k, v in sets.items() if v.shape[0] == 0]
+    if missing or len(sets) < 2:
+        raise RuntimeError(f"OOD control sets unavailable for the figure: {sorted(sets)}, empty {missing}")
+    mean = torch.tensor(D.CIFAR10_MEAN).view(3, 1, 1)
+    std = torch.tensor(D.CIFAR10_STD).view(3, 1, 1)
     titles = {"near_svhn": "near-OOD: SVHN", "far_tiny_imagenet": "far-OOD: Tiny-ImageNet-200"}
-    for row, (key, loader) in enumerate(ood.items()):
-        mean = torch.tensor(D.CIFAR10_MEAN).view(3, 1, 1)
-        std = torch.tensor(D.CIFAR10_STD).view(3, 1, 1)
-        for col, (x, _) in enumerate(loader):
-            if col >= 10:
-                break
-            axes[row, col].imshow(((x[col] * std + mean).permute(1, 2, 0).clamp(0, 1)).numpy())
+    columns = min(int(v.shape[0]) for v in sets.values())
+    fig, axes = plt.subplots(2, columns, figsize=(13, 2.9))
+    axes = np.atleast_2d(axes)
+    fig.subplots_adjust(left=0.075)
+    for row, (key, images) in enumerate(sorted(sets.items(), key=lambda kv: kv[0] != "near_svhn")):
+        for col in range(columns):
+            pixel = (images[col] * std + mean).permute(1, 2, 0).clamp(0, 1).numpy()
+            axes[row, col].imshow(pixel)
             axes[row, col].set_axis_off()
-        axes[row, 0].set_ylabel(titles.get(key, key), fontsize=8)
-    fig.suptitle("Figure 2 (bottom). The two out-of-distribution control sets", y=1.0)
+        # A ylabel would be hidden by set_axis_off, so the row name is drawn on the figure instead.
+        position = axes[row, 0].get_position()
+        fig.text(
+            0.008,
+            (position.y0 + position.y1) / 2,
+            titles.get(key, key),
+            rotation=90,
+            va="center",
+            ha="left",
+            fontsize=8,
+        )
+    fig.suptitle("The two out-of-distribution control sets, as the classifier receives them", y=1.0)
     return _save(fig, "figure_02b_ood_examples.png")
 
 
@@ -606,9 +657,10 @@ def fig_spectral_norm_ablation() -> Path | None:
     on = json.loads(MAIN_RESULTS.read_text(encoding="utf-8"))["aggregate"]
     off = json.loads(NOSN_RESULTS.read_text(encoding="utf-8"))["aggregate"]
 
-    metrics = [("top1", "Top-1 accuracy", 4), ("nll", "negative log-likelihood", 4),
-               ("ece", "expected calibration error", 4)]
-    fig, axes = plt.subplots(1, 3, figsize=(9.8, 3.3), sharex=True)
+    metrics = [("top1", "Top-1 accuracy", 5), ("nll", "negative log-likelihood", 5),
+               ("ece", "expected calibration error", 5),
+               ("near_svhn_epistemic_auroc", "near-OOD AUROC, epistemic score", 5)]
+    fig, axes = plt.subplots(1, 4, figsize=(12.6, 3.3), sharex=True)
     short = {m: m.split("_")[0] for m in MODEL_NAMES}
     x = np.arange(len(MODEL_NAMES))
     for axis, (key, title, dp) in zip(axes, metrics):
@@ -621,9 +673,10 @@ def fig_spectral_norm_ablation() -> Path | None:
         axis.bar(x + 0.19, b, width=0.36, yerr=eb, capsize=2, color="#c8cfc9",
                  edgecolor="#33414f", hatch="///", label="without")
         for xi, (va, vb) in enumerate(zip(a, b)):
-            axis.text(xi + 0.19, vb, f"{vb - va:+.{dp - 1}f}" if key != "top1"
-                      else f"{(vb - va) * 100:+.2f}", ha="center",
-                      va="bottom" if vb >= va else "top", fontsize=6.6, color="#ab2a1e")
+            axis.text(xi + 0.19, max(va, vb), f"{vb - va:+.{dp - 1}f}", ha="center",
+                      va="bottom", fontsize=6.4,
+                      color="#ab2a1e",
+                      bbox=dict(facecolor="white", edgecolor="none", pad=0.6))
         axis.set_title(title, fontsize=9)
         axis.tick_params(labelsize=8)
         axis.spines[["top", "right"]].set_visible(False)
@@ -651,9 +704,11 @@ def fig_calibration_families(store: dict, seed: str) -> Path:
                  color=["#0d6ba6" if i == best else "#c8cfc9" for i in range(len(picks))],
                  edgecolor="#33414f", linewidth=0.7)
         for i, v in enumerate(means):
-            axis.text(i, v, f"{v:.4f}", ha="center", va="bottom", fontsize=6.8)
+            axis.text(i, v + stds[i], f"{v:.4f}", ha="center", va="bottom", fontsize=6.8,
+                      bbox=dict(facecolor="white", edgecolor="none", pad=0.6))
+        axis.set_ylim(0, float((means + stds).max()) * 1.18)
         axis.set_title(title, fontsize=9)
-        axis.set_xticks(range(len(picks)), labels, fontsize=7.4)
+        axis.set_xticks(range(len(picks)), labels, fontsize=7.2)
         axis.tick_params(labelsize=8)
         axis.spines[["top", "right"]].set_visible(False)
     axes[0].set_ylabel("lower is better", fontsize=8)

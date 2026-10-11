@@ -107,8 +107,9 @@ code branch.
   them from their published locations. The `gh-pages` branch carries the 10,000 test thumbnails used
   by the bench, following the precedent set by Assignment 1.
 - **F-EDL** (`github.com/TaeseongYoon/F-EDL`) declares no licence. Its mathematics was recovered from
-  the paper's method section and appendix and re-implemented from scratch, with the consultation
-  recorded as decision D-1(b) in the report; no source file was copied.
+  the paper's method section and appendix and re-implemented from scratch; the reference repository
+  was consulted only to check that recovery, and no source file was copied. What was read, and for
+  what, is listed in `research_records/stage_02b_math_recovery.md`.
 - **laplace-torch** (Apache 2.0) is used only as an independent cross-check of the Kronecker
   curvature in `tests/test_laplace_icla.py`, and is not required to run the experiments.
 - **Archivo** and **JetBrains Mono** are variable fonts under the SIL Open Font License 1.1, subset

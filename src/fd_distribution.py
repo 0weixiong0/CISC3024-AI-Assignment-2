@@ -4,7 +4,7 @@ Project : CISC3024 AI Assignment #2 (Pattern Recognition, University of Macau)
 Author  : AI-generated implementation (Qoder). The student wrote no code.
 Status  : Written from the mathematical statements recovered in
           ``research_records/stage_02b_math_recovery.md`` sections 2-3. No source code was copied
-          from the unlicensed reference repository; see the consultation record and decision D-1(b).
+          from the unlicensed reference repository; that record lists what was read and why.
 
 Mathematics
 -----------

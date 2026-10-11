@@ -738,6 +738,13 @@ u { text-decoration-thickness: 1px; text-underline-offset: 3px; }
   border-bottom: 1px solid var(--ink);
   transform: rotate(-16deg);
 }
+/* The evidential card while its network is still on the wire: the frame is there, the reading
+   is not, so it must not be mistaken for a measurement of zero. */
+.instrument[data-state="waiting"] .instrument__body { opacity: 0.45; }
+.instrument[data-state="waiting"] .instrument__verdict {
+  color: var(--ink-weak);
+  font-weight: 500;
+}
 .strike-word {
   border-bottom: 1px solid var(--rule-mid);
   color: var(--ink-weak);

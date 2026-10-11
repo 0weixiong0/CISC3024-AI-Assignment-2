@@ -63,9 +63,10 @@ class TemperatureScaler:
 class DirichletScaler:
     """Vector scaling in log-probability space: ``z' = t * log softmax(z) + b``.
 
-    This is the Dirichlet-calibration family (Reea et al., Kuhn et al.): an affine map on log
-    probabilities, which is the natural post-hoc transformation for a model whose predictive is a
-    distribution over the simplex. ``t`` and ``b`` are per-class and fitted on validation NLL.
+    This is the Dirichlet-calibration family of Kull et al., *Beyond temperature scaling* (NeurIPS
+    2019, arXiv:1910.12656): an affine map on log probabilities, which is the natural post-hoc
+    transformation for a model whose predictive is a distribution over the simplex. ``t`` and ``b``
+    are per-class and fitted on validation NLL.
     """
 
     t: Tensor | None = None
